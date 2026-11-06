@@ -1496,6 +1496,60 @@ namespace Robust.Shared
             CVarDef.Create("physics.grid_splitting", true, CVar.ARCHIVE | CVar.REPLICATED | CVar.SERVER);
 
         /// <summary>
+        /// Margin in metres added around a fixture's box in the broadphase tree. A body is only reinserted and
+        /// re-paired once its exact box leaves the fat one, instead of on every move. 0 restores exact boxes.
+        /// Read by shared code, so registered on both sides but not replicated: a stock client never learns of it.
+        /// </summary>
+        public static readonly CVarDef<float> PhysicsBroadphaseMargin =
+            CVarDef.Create("physics.broadphase_margin", 0.1f, CVar.ARCHIVE);
+
+        /// <summary>
+        /// Whether a body standing on a non-empty tile of its own grid skips the map-wide grid lookup on each move.
+        /// Changes which grid wins when two overlap: the current one stays.
+        /// </summary>
+        public static readonly CVarDef<bool> PhysicsTraversalTileFastPath =
+            CVarDef.Create("physics.traversal_tile_fast_path", true, CVar.ARCHIVE);
+
+        /// <summary>
+        /// Whether pausing an entity puts its awake body to sleep until it is unpaused, so paused bodies cost
+        /// nothing in the solver loops.
+        /// </summary>
+        public static readonly CVarDef<bool> PhysicsSleepPausedBodies =
+            CVarDef.Create("physics.sleep_paused_bodies", true, CVar.ARCHIVE);
+
+        /// <summary>
+        /// Whether removing an anchored entity from a tile swaps the last entry into its place instead of shifting the
+        /// list. Changes the order anchored entities are enumerated in on that tile.
+        /// </summary>
+        public static readonly CVarDef<bool> MapAnchoredSwapRemove =
+            CVarDef.Create("map.anchored_swap_remove", true, CVar.ARCHIVE);
+
+        /// <summary>
+        /// Whether the server compiles the serializer's write delegates for every component type on a worker thread at
+        /// startup, so the first grid save of a round doesn't compile them one by one on the main thread.
+        /// </summary>
+        public static readonly CVarDef<bool> SerializationPrecompile =
+            CVarDef.Create("serialization.precompile", true, CVar.ARCHIVE | CVar.SERVERONLY);
+
+        /// <summary>
+        /// Whether a batch of incoming encrypted packets is decrypted in parallel before being handled in order.
+        /// </summary>
+        public static readonly CVarDef<bool> NetParallelDecrypt =
+            CVarDef.Create("net.parallel_decrypt", true, CVar.ARCHIVE);
+
+        /// <summary>
+        /// Encrypted packets a batch needs before it is decrypted in parallel; smaller batches stay on the main thread.
+        /// </summary>
+        public static readonly CVarDef<int> NetParallelDecryptMin =
+            CVarDef.Create("net.parallel_decrypt_min", 16, CVar.ARCHIVE);
+
+        /// <summary>
+        /// Whether a message sent to many clients is serialised once and copied, instead of once per client.
+        /// </summary>
+        public static readonly CVarDef<bool> NetBroadcastSerializeOnce =
+            CVarDef.Create("net.broadcast_serialize_once", true, CVar.ARCHIVE);
+
+        /// <summary>
         /// How much to enlarge grids when determining their fixture bounds.
         /// </summary>
         public static readonly CVarDef<float> GridFixtureEnlargement =

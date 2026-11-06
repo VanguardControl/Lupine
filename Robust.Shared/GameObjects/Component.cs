@@ -30,6 +30,13 @@ namespace Robust.Shared.GameObjects
     [ImplicitDataDefinitionForInheritors]
     public abstract partial class Component : IComponent
     {
+        // Wolfgate: the runtime's identity hash takes a slow path the first time an object is hashed, and every new
+        // component is hashed into the per-entity component index. A counter is as stable and costs nothing.
+        private static int _nextHashCode;
+        private readonly int _hashCode = System.Threading.Interlocked.Increment(ref _nextHashCode);
+
+        public override int GetHashCode() => _hashCode;
+
         [DataField("netsync")]
         [ViewVariables(VVAccess.ReadWrite)]
         private bool _netSync { get; set; } = true;

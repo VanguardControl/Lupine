@@ -646,7 +646,8 @@ public abstract partial class SharedPhysicsSystem
         );
 
         // We'll sort islands from internally parallel (due to lots of contacts) to running all the islands in parallel
-        _islands.Sort(static (x, y) => InternalParallel(y).CompareTo(InternalParallel(x)));
+        // Wolfgate: there are only two classes, so a stable partition replaces the sort.
+        PartitionIslands();
 
         var totalBodies = 0;
         var islands = CollectionsMarshal.AsSpan(_islands);
@@ -729,6 +730,33 @@ public abstract partial class SharedPhysicsSystem
     /// </summary>
     /// <param name="island"></param>
     /// <returns></returns>
+    /// <summary>
+    /// Moves the internally parallel islands to the front, keeping each class in its original order.
+    /// </summary>
+    private void PartitionIslands()
+    {
+        _islandPartition.Clear();
+        _islandPartition.EnsureCapacity(_islands.Count);
+
+        foreach (var island in _islands)
+        {
+            if (InternalParallel(island))
+                _islandPartition.Add(island);
+        }
+
+        foreach (var island in _islands)
+        {
+            if (!InternalParallel(island))
+                _islandPartition.Add(island);
+        }
+
+        _islands.Clear();
+        _islands.AddRange(_islandPartition);
+        _islandPartition.Clear();
+    }
+
+    private readonly List<IslandData> _islandPartition = new();
+
     private static bool InternalParallel(IslandData island)
     {
         // Should lone island most times as well.

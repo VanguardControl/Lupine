@@ -74,6 +74,12 @@ public sealed partial class PhysicsComponent : Component, IComponentDelta
     public bool Awake;
 
     /// <summary>
+    /// Wolfgate: set when pausing put this awake body to sleep, so unpausing wakes it again. Not networked.
+    /// </summary>
+    [ViewVariables, Access(typeof(SharedPhysicsSystem))]
+    public bool WakeOnUnpause;
+
+    /// <summary>
     /// You can disable sleeping on this body. If you disable sleeping, the
     /// body will be woken.
     /// </summary>

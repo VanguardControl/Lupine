@@ -29,6 +29,25 @@ namespace Robust.Shared.Physics.Dynamics;
 
 public sealed class FixtureProxy
 {
+    // Wolfgate: proxies live in hash sets (the move buffer); a counter avoids the runtime's slow first identity hash.
+    private static int _nextHashCode;
+    private readonly int _hashCode = System.Threading.Interlocked.Increment(ref _nextHashCode);
+
+    public override int GetHashCode() => _hashCode;
+
+    /// <summary>
+    /// Wolfgate: the box stored in the broadphase tree, <see cref="AABB"/> grown by the broadphase margin. The proxy is
+    /// only reinserted and re-paired when the exact box leaves it.
+    /// </summary>
+    [ViewVariables]
+    public Box2 FatAABB;
+
+    /// <summary>
+    /// Wolfgate: set when the proxy's contacts were destroyed outside the broadphase (a grid changing map), so the next
+    /// update re-queues it for pairing even if it is still inside its fat box.
+    /// </summary>
+    public bool ForceRequeue;
+
     public EntityUid Entity;
     public PhysicsComponent Body { get; internal set; }
 

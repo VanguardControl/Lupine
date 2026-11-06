@@ -111,9 +111,12 @@ namespace Robust.Shared.Physics.Systems
             SubscribeLocalEvent<PhysicsComponent, ComponentShutdown>(OnPhysicsShutdown);
             SubscribeLocalEvent<PhysicsComponent, ComponentGetState>(OnPhysicsGetState);
             SubscribeLocalEvent<PhysicsComponent, ComponentHandleState>(OnPhysicsHandleState);
+            SubscribeLocalEvent<PhysicsComponent, EntityPausedEvent>(OnPhysicsPaused);
+            SubscribeLocalEvent<PhysicsComponent, EntityUnpausedEvent>(OnPhysicsUnpaused);
             InitializeIsland();
             InitializeContacts();
 
+            Subs.CVar(_cfg, CVars.PhysicsSleepPausedBodies, value => _sleepPausedBodies = value, true);
             Subs.CVar(_cfg, CVars.AutoClearForces, OnAutoClearChange, true);
             Subs.CVar(_cfg, CVars.NetTickrate, UpdateSubsteps, true);
             Subs.CVar(_cfg, CVars.TargetMinimumTickrate, UpdateSubsteps, true);
