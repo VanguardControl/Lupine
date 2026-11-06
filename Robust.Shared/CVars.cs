@@ -281,6 +281,25 @@ namespace Robust.Shared
             CVarDef.Create("net.pvs_async", true, CVar.ARCHIVE | CVar.SERVERONLY);
 
         /// <summary>
+        /// Seconds an entity may stay out of a client's view before the server tells that client to delete its copy.
+        /// The entity is sent in full if it comes back into view. 0 disables eviction.
+        /// </summary>
+        public static readonly CVarDef<float> NetPvsEvictSeconds =
+            CVarDef.Create("net.pvs_evict_seconds", 300f, CVar.ARCHIVE | CVar.SERVERONLY);
+
+        /// <summary>
+        /// Seconds between sweeps of one client's held entities for eviction. See <see cref="NetPvsEvictSeconds"/>.
+        /// </summary>
+        public static readonly CVarDef<float> NetPvsEvictInterval =
+            CVarDef.Create("net.pvs_evict_interval", 5f, CVar.ARCHIVE | CVar.SERVERONLY);
+
+        /// <summary>
+        /// Most entities one sweep evicts from a client, so the client never deletes a large batch in one frame.
+        /// </summary>
+        public static readonly CVarDef<int> NetPvsEvictBudget =
+            CVarDef.Create("net.pvs_evict_budget", 1000, CVar.ARCHIVE | CVar.SERVERONLY);
+
+        /// <summary>
         /// View size to take for PVS calculations, as the size of the sides of a square centered on the view points of
         /// clients. See also <see cref="NetPvsPriorityRange"/>.
         /// </summary>

@@ -103,6 +103,27 @@ internal sealed partial class PvsSystem : EntitySystem
     private readonly HashSet<EntityUid> _toDelete = new();
 
     /// <summary>
+    /// Ticks an entity may stay out of a client's view before it is evicted from that client. 0 disables eviction.
+    /// </summary>
+    private uint _evictAgeTicks;
+
+    /// <summary>
+    /// Ticks between eviction sweeps of one client.
+    /// </summary>
+    private uint _evictIntervalTicks = 1;
+
+    /// <summary>
+    /// Most entities one sweep evicts from a client.
+    /// </summary>
+    private int _evictBudget;
+
+    /// <summary>
+    /// PVS indices of the grids and maps in <see cref="PvsOverrideSystem.RangeLimited"/>, snapshotted each tick for
+    /// the leave job, which evicts them from a client instead of detaching them.
+    /// </summary>
+    private readonly HashSet<PvsIndex> _rangeLimitedRoots = new();
+
+    /// <summary>
     /// The sessions that are currently being processed. Note that this is in general used by parallel & async tasks.
     /// Hence player disconnection processing is deferred and only run via <see cref="ProcessDisconnections"/>.
     /// </summary>
@@ -155,6 +176,9 @@ internal sealed partial class PvsSystem : EntitySystem
         Subs.CVar(_configManager, CVars.NetForceAckThreshold, OnForceAckChanged, true);
         Subs.CVar(_configManager, CVars.NetPvsAsync, OnAsyncChanged, true);
         Subs.CVar(_configManager, CVars.NetPvsCompressLevel, ResetParallelism, true);
+        Subs.CVar(_configManager, CVars.NetPvsEvictSeconds, OnEvictSecondsChanged, true);
+        Subs.CVar(_configManager, CVars.NetPvsEvictInterval, OnEvictIntervalChanged, true);
+        Subs.CVar(_configManager, CVars.NetPvsEvictBudget, OnEvictBudgetChanged, true);
 
         _serverGameStateManager.ClientAck += OnClientAck;
         _serverGameStateManager.ClientRequestFull += OnClientRequestFull;
@@ -440,6 +464,16 @@ internal sealed partial class PvsSystem : EntitySystem
     {
         DebugTools.Assert(_chunks.Values.All(x => Exists(x.Map) && Exists(x.Root)));
         DebugTools.Assert(_chunkSets.Keys.All(Exists));
+
+        // Eviction sweeps read every session data slot, so the job clearing freed slots must be done first.
+        WaitDeletionTask();
+
+        _rangeLimitedRoots.Clear();
+        foreach (var uid in _pvsOverride.RangeLimited)
+        {
+            if (_metaQuery.TryGetComponent(uid, out var meta) && meta.PvsData != PvsIndex.Invalid)
+                _rangeLimitedRoots.Add(meta.PvsData);
+        }
 
         var ackJob = ProcessQueuedAcks();
 

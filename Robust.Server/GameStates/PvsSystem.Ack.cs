@@ -135,7 +135,11 @@ internal sealed partial class PvsSystem
         foreach (ref var intPtr in CollectionsMarshal.AsSpan(ackedEnts))
         {
             ref var data = ref session.DataMemory.GetRef(intPtr.Index);
-            DebugTools.AssertNotEqual(data.LastSeen, GameTick.Zero);
+
+            // Evicted since this state was sent: the client is deleting it, so there is nothing to ack.
+            if (data.LastSeen == GameTick.Zero)
+                continue;
+
             DebugTools.Assert(data.LastSeen >= ackedTick); // LastSent may equal ackedTick if the packet was sent reliably.
             data.EntityLastAcked = ackedTick;
         }

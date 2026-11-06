@@ -7,6 +7,7 @@ using Robust.Shared.Enums;
 using Robust.Shared.GameObjects;
 using Robust.Shared.GameStates;
 using Robust.Shared.IoC;
+using Robust.Shared.Map.Components;
 using Robust.Shared.Player;
 using Robust.Shared.Utility;
 
@@ -23,6 +24,12 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
     internal HashSet<EntityUid> ForceSend = new();
     internal Dictionary<ICommonSession, HashSet<EntityUid>> SessionOverrides = new();
     internal Dictionary<ICommonSession, HashSet<EntityUid>> SessionForceSend = new();
+
+    /// <summary>
+    /// Grids and maps sent like any other entity, through the chunks a viewer can see, instead of to every session.
+    /// See <see cref="SetRangeLimited"/>.
+    /// </summary>
+    internal readonly HashSet<EntityUid> RangeLimited = new();
 
     public override void Initialize()
     {
@@ -114,6 +121,8 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
 
     private void Clear(EntityUid uid)
     {
+        RangeLimited.Remove(uid);
+
         if (!_hasOverride.Remove(uid))
             return;
 
@@ -176,6 +185,31 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
         // Not bothering to clear _hasOverride, as we'd have to check all the other collections, and at that point we
         // might as well just do that when the entity gets deleted anyways.
     }
+
+    /// <summary>
+    /// Sends a grid or map only through the PVS chunks a viewer can see, instead of force-sending it to every
+    /// session. Meant for large grids few players are near, such as planet layers, whose tiles would otherwise be
+    /// serialised for every join and full-state request. The client detaches the grid when it leaves view and gets
+    /// it back when a viewer returns.
+    /// </summary>
+    public void SetRangeLimited(EntityUid uid, bool limited)
+    {
+        if (limited)
+        {
+            if (RangeLimited.Add(uid))
+                RemoveForceSend(uid);
+
+            return;
+        }
+
+        if (RangeLimited.Remove(uid) && (HasComp<MapGridComponent>(uid) || HasComp<MapComponent>(uid)))
+            AddForceSend(uid);
+    }
+
+    /// <summary>
+    /// Whether <see cref="SetRangeLimited"/> has taken the grid or map out of the global force-send set.
+    /// </summary>
+    public bool IsRangeLimited(EntityUid uid) => RangeLimited.Contains(uid);
 
     /// <summary>
     /// This causes an entity and all of its parents to always be sent to a player.
@@ -263,7 +297,8 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
     {
         // TODO PVS remove this requirement.
         // I think this just required refactoring client game state logic so it doesn't send grids to nullspace?
-        AddForceSend(ev.EntityUid);
+        if (!RangeLimited.Contains(ev.EntityUid))
+            AddForceSend(ev.EntityUid);
     }
 
     private void OnMapRemoved(MapRemovedEvent ev)
@@ -275,7 +310,8 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
     {
         // TODO PVS remove this requirement.
         // I think this just required refactoring client game state logic so it doesn't sending maps/grids to nullspace.
-        AddForceSend(ev.Uid);
+        if (!RangeLimited.Contains(ev.Uid))
+            AddForceSend(ev.Uid);
     }
 
     #endregion

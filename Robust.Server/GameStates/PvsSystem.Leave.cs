@@ -8,6 +8,7 @@ using Robust.Shared.Log;
 using Robust.Shared.Network.Messages;
 using Robust.Shared.Player;
 using Robust.Shared.Threading;
+using Robust.Shared.Timing;
 using Robust.Shared.Utility;
 
 namespace Robust.Server.GameStates;
@@ -53,6 +54,17 @@ internal sealed partial class PvsSystem
             ref var data = ref session.DataMemory.GetRef(intPtr.Index);
             if (data.LastSeen == toTick)
                 continue;
+
+            // A range-limited grid or map must never sit detached on a client, which can't re-attach a grid's
+            // children. Delete it there instead; it is sent as new if a viewer comes back. The deletion first rides
+            // in the next tick's state, so that is the eviction tick.
+            if (_rangeLimitedRoots.Contains(intPtr))
+            {
+                var evictTick = new GameTick(toTick.Value + 1);
+                session.Evicted.Add((IndexToNetEntity(intPtr), evictTick));
+                data = new PvsData { Evicted = evictTick };
+                continue;
+            }
 
             ref var meta = ref _metadataMemory.GetRef(intPtr.Index);
             if (meta.IsChunkEntity)

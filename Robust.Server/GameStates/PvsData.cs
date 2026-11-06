@@ -138,6 +138,28 @@ internal sealed class PvsSession(ICommonSession session, ResizableMemoryRegion<P
     public bool ForceSendReliably { get; set; }
 
     /// <summary>
+    /// Deletions this client still needs: global deletions newer than its last ack plus its own evictions.
+    /// Rebuilt every tick by <see cref="PvsSystem.BuildDeletions"/>.
+    /// </summary>
+    public readonly List<NetEntity> Deletions = new();
+
+    /// <summary>
+    /// Entities evicted from this client with the tick they were evicted on. An entry stays until the client acks a
+    /// tick at or past it, since the deletion rides along in every state until then.
+    /// </summary>
+    public readonly List<(NetEntity Entity, GameTick Tick)> Evicted = new();
+
+    /// <summary>
+    /// First tick at which this client's held entities are swept for eviction again.
+    /// </summary>
+    public GameTick NextEvictionSweep;
+
+    /// <summary>
+    /// Where the last eviction sweep stopped, so a budget-limited sweep walks the whole data memory over time.
+    /// </summary>
+    public int EvictionCursor;
+
+    /// <summary>
     /// Clears all stored game state data. This should only be used after the game state has been serialized.
     /// </summary>
     public void ClearState()
@@ -174,6 +196,12 @@ internal struct PvsData
     /// present in that state.
     /// </summary>
     public GameTick EntityLastAcked;
+
+    /// <summary>
+    /// Tick at which the server told this player to delete the entity because it had been out of view for too long.
+    /// The entity is held back until the player acks a later tick, then sent as new if it re-enters view.
+    /// </summary>
+    public GameTick Evicted;
 }
 
 /// <summary>
