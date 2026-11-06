@@ -408,15 +408,29 @@ internal abstract class BaseTransferImpl(ISawmill sawmill, BaseTransferManager p
         ~ChunkedSendStream()
         {
             // Have to do this so the stream isn't permanently hanging on the receiving side.
-            FlushAsync(finish: true).AsTask().Wait();
+            try
+            {
+                FlushAsync(finish: true).AsTask().Wait();
+            }
+            catch (Exception)
+            {
+                // A throw from a finalizer would kill the process, and a dead connection has no receiving side.
+            }
         }
     }
 
     public virtual void Dispose()
     {
+        CompleteReceivingChannels();
+    }
+
+    /// <summary>Ends every incoming transfer, so nothing waits on data that can't arrive.</summary>
+    /// <param name="error">Set when the transfers were cut short, so a reader can't take a partial file for a whole one.</param>
+    protected void CompleteReceivingChannels(Exception? error = null)
+    {
         foreach (var channel in _receivingChannels.Values)
         {
-            channel.Complete();
+            channel.TryComplete(error);
         }
     }
 

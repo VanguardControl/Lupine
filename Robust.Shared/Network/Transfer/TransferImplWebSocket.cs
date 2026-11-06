@@ -26,6 +26,9 @@ internal abstract class TransferImplWebSocket : BaseTransferImpl
 
     public WebSocket? WebSocket;
 
+    // Set once the socket has died. The game connection carries on without large transfers.
+    private volatile bool _socketLost;
+
     protected TransferImplWebSocket(ISawmill sawmill, BaseTransferManager parent, INetChannel channel)
         : base(sawmill, parent, channel)
     {
@@ -37,6 +40,9 @@ internal abstract class TransferImplWebSocket : BaseTransferImpl
     {
         if (WebSocket == null)
             throw new InvalidOperationException("Player not connected yet");
+
+        if (_socketLost)
+            throw new InvalidOperationException("Player's transfer socket was lost");
 
         var id = Interlocked.Increment(ref OutgoingIdCounter);
 
@@ -58,6 +64,13 @@ internal abstract class TransferImplWebSocket : BaseTransferImpl
 
                 BaseTransferManager.ReceivedDataMetrics.Inc(receiveResult.Count);
 
+                if (receiveResult.MessageType == WebSocketMessageType.Close)
+                {
+                    HandleSocketLost("closed by the other side");
+                    CompleteReceivingChannels(new IOException("Transfer socket was lost"));
+                    return;
+                }
+
                 if (!receiveResult.EndOfMessage)
                     throw new ProtocolViolationException("Header did not fit in one receive");
 
@@ -74,10 +87,41 @@ internal abstract class TransferImplWebSocket : BaseTransferImpl
                 HandlePostData(flags, transferId, channel);
             }
         }
+        catch (Exception) when (_readCancel.IsCancellationRequested)
+        {
+            // We're being disposed, so the read failing is expected.
+        }
+        catch (Exception e) when (e is WebSocketException or IOException or ObjectDisposedException)
+        {
+            HandleSocketLost(e.Message);
+            CompleteReceivingChannels(new IOException("Transfer socket was lost"));
+        }
         catch (Exception e)
         {
-            Sawmill.Error($"Error reading transfer socket: {e}");
+            try
+            {
+                Sawmill.Error($"Error reading transfer socket: {e}");
+            }
+            catch (ObjectDisposedException)
+            {
+                // Logging has shut down. This runs in an async void, where a throw would kill the process.
+            }
+
             Channel.Disconnect("Error in transfer socket");
+        }
+    }
+
+    private void HandleSocketLost(string reason)
+    {
+        _socketLost = true;
+
+        try
+        {
+            Sawmill.Warning($"Lost transfer socket for {Channel}: {reason}");
+        }
+        catch (ObjectDisposedException)
+        {
+            // Logging has shut down.
         }
     }
 
@@ -89,16 +133,28 @@ internal abstract class TransferImplWebSocket : BaseTransferImpl
 
         protected override async ValueTask SendChunkAsync(ArraySegment<byte> buffer, CancellationToken cancel)
         {
-            var ws = ((TransferImplWebSocket)Parent).WebSocket!;
+            var parent = (TransferImplWebSocket)Parent;
+            if (parent._socketLost)
+                throw new IOException("Transfer socket was lost");
+
+            var ws = parent.WebSocket!;
 
             BaseTransferManager.SentDataMetrics.Inc(buffer.Count);
 
-            await ws.SendAsync(
-                    buffer,
-                    WebSocketMessageType.Binary,
-                    endOfMessage: true,
-                    cancel)
-                .ConfigureAwait(false);
+            try
+            {
+                await ws.SendAsync(
+                        buffer,
+                        WebSocketMessageType.Binary,
+                        endOfMessage: true,
+                        cancel)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception e) when (e is WebSocketException or IOException or ObjectDisposedException)
+            {
+                parent.HandleSocketLost(e.Message);
+                throw;
+            }
         }
     }
 
@@ -114,6 +170,9 @@ internal abstract class TransferImplWebSocket : BaseTransferImpl
 
             BaseTransferManager.ReceivedDataMetrics.Inc(result.Count);
 
+            if (result.MessageType == WebSocketMessageType.Close)
+                throw new IOException("Closed by the other side during a transfer");
+
             if (result.MessageType != WebSocketMessageType.Binary)
                 throw new ProtocolViolationException("Data must be binary!");
 
@@ -128,8 +187,9 @@ internal abstract class TransferImplWebSocket : BaseTransferImpl
     {
         base.Dispose();
 
-        WebSocket?.Dispose();
+        // Cancel first, so the read loop knows the socket closing under it is expected.
         _readCancel.Cancel();
+        WebSocket?.Dispose();
 
         ArrayPool<byte>.Shared.Return(_headerBuffer);
     }
