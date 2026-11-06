@@ -642,10 +642,21 @@ namespace Robust.Shared.Network
 
             foreach (var peer in _netPeers)
             {
-                NetIncomingMessage? msg;
-                var recycle = true;
-                while ((msg = peer.Peer.ReadMessage()) != null)
+                // Wolfgate: read the whole batch first so encrypted data packets can be decrypted in parallel, then
+                // handle them in arrival order.
+                _incoming.Clear();
+                NetIncomingMessage? read;
+                while ((read = peer.Peer.ReadMessage()) != null)
                 {
+                    _incoming.Add(read);
+                }
+
+                PreDecrypt();
+
+                var recycle = true;
+                for (var i = 0; i < _incoming.Count; i++)
+                {
+                    var msg = _incoming[i];
                     countProcessed += 1;
                     switch (msg.MessageType)
                     {
@@ -676,7 +687,7 @@ namespace Robust.Shared.Network
 
                         case NetIncomingMessageType.Data:
                             countDataProcessed += 1;
-                            recycle = DispatchNetMessage(msg);
+                            recycle = DispatchNetMessage(msg, _preDecrypted[i]);
                             break;
 
                         case NetIncomingMessageType.StatusChanged:
@@ -1034,7 +1045,70 @@ namespace Robust.Shared.Network
             channel.Disconnect(reason);
         }
 
-        private bool DispatchNetMessage(NetIncomingMessage msg)
+        private const byte PreDecryptNone = 0;
+        private const byte PreDecryptDone = 1;
+        private const byte PreDecryptFailed = 2;
+
+        /// <summary>Wolfgate: the packets read this tick, handled in order after <see cref="PreDecrypt"/>.</summary>
+        private readonly List<NetIncomingMessage> _incoming = new();
+
+        /// <summary>Wolfgate: one entry per message in <see cref="_incoming"/>: not attempted, decrypted or failed.</summary>
+        private byte[] _preDecrypted = new byte[64];
+
+        /// <summary>
+        /// Wolfgate: decrypts a batch of data packets on worker threads before they are handled in order. Decryption is
+        /// stateless per packet (the nonce travels with it), so packets of one connection are safe to decrypt side by
+        /// side. Connections awaiting raw data, or without encryption yet, are left to the ordered path.
+        /// </summary>
+        private void PreDecrypt()
+        {
+            if (_preDecrypted.Length < _incoming.Count)
+                Array.Resize(ref _preDecrypted, Math.Max(_incoming.Count, _preDecrypted.Length * 2));
+
+            Array.Clear(_preDecrypted, 0, _incoming.Count);
+
+            var minimum = Math.Max(1, _config.GetCVar(CVars.NetParallelDecryptMin));
+            if (_incoming.Count < minimum || !_config.GetCVar(CVars.NetParallelDecrypt))
+                return;
+
+            var candidates = 0;
+            for (var i = 0; i < _incoming.Count; i++)
+            {
+                var msg = _incoming[i];
+                if (msg.MessageType != NetIncomingMessageType.Data || msg.SenderConnection == null || msg.LengthBytes < 1)
+                    continue;
+
+                if (_awaitingData.ContainsKey(msg.SenderConnection))
+                    continue;
+
+                if (!_channels.TryGetValue(msg.SenderConnection, out var channel) || channel.Encryption == null)
+                    continue;
+
+                _preDecrypted[i] = PreDecryptDone;
+                candidates++;
+            }
+
+            if (candidates < minimum)
+            {
+                Array.Clear(_preDecrypted, 0, _incoming.Count);
+                return;
+            }
+
+            var incoming = _incoming;
+            var flags = _preDecrypted;
+            var channels = _channels;
+            Parallel.For(0, incoming.Count, i =>
+            {
+                if (flags[i] != PreDecryptDone)
+                    return;
+
+                var msg = incoming[i];
+                var channel = channels[msg.SenderConnection!];
+                flags[i] = channel.Encryption!.TryDecrypt(msg) ? PreDecryptDone : PreDecryptFailed;
+            });
+        }
+
+        private bool DispatchNetMessage(NetIncomingMessage msg, byte preDecrypt = PreDecryptNone)
         {
             DebugTools.Assert(msg.SenderConnection != null);
 
@@ -1092,7 +1166,9 @@ namespace Robust.Shared.Network
             }
 
             // Attempt to decrypt the message, only logging if we fail to decrypt and we actually have encryption.
-            if ((!channel.Encryption?.TryDecrypt(msg)) ?? false)
+            // Wolfgate: the batch may already have been decrypted in parallel; see PreDecrypt.
+            if (preDecrypt == PreDecryptFailed
+                || (preDecrypt == PreDecryptNone && ((!channel.Encryption?.TryDecrypt(msg)) ?? false)))
             {
                 if (_logPacketIssues)
                     _logger.Debug($"{msg.SenderConnection.RemoteEndPoint}: Got a packet that fails to decrypt.");
@@ -1253,13 +1329,48 @@ namespace Robust.Shared.Network
             if (!IsConnected)
                 return;
 
+            // Wolfgate: serialise once and copy the bytes to every recipient instead of serialising per recipient.
+            var once = _config.GetCVar(CVars.NetBroadcastSerializeOnce);
+            byte[]? payload = null;
+            var payloadBits = 0;
+
             foreach (var channel in _channels.Values)
             {
                 if (!channel.IsHandshakeComplete)
                     continue;
 
-                ServerSendMessage(message, channel);
+                if (!once)
+                {
+                    ServerSendMessage(message, channel);
+                    continue;
+                }
+
+                payload ??= BuildPayload(message, channel, out payloadBits);
+                CoreSendMessage(channel, message, payload, payloadBits);
             }
+        }
+
+        /// <summary>Wolfgate: serialises a message once for a broadcast; each recipient gets a copy of these bytes.</summary>
+        private byte[] BuildPayload(NetMessage message, NetChannel channel, out int lengthBits)
+        {
+            var packet = BuildMessage(message, channel);
+            lengthBits = packet.LengthBits;
+            var payload = new byte[packet.LengthBytes];
+            Buffer.BlockCopy(packet.Data, 0, payload, 0, packet.LengthBytes);
+            return payload;
+        }
+
+        /// <summary>Wolfgate: a packet for one recipient from bytes serialised by <see cref="BuildPayload"/>.</summary>
+        private NetOutgoingMessage BuildMessage(byte[] payload, int lengthBits, NetChannel channel)
+        {
+            var capacity = payload.Length;
+            if (channel.Encryption != null)
+                capacity += NetEncryption.EncryptionOverhead;
+
+            var packet = channel.Connection.Peer.CreateMessage(capacity);
+            packet.Write(payload);
+            packet.LengthBits = lengthBits;
+            return packet;
         }
 
         /// <inheritdoc />
@@ -1290,9 +1401,26 @@ namespace Robust.Shared.Network
             if (!IsConnected)
                 return;
 
-            foreach (var channel in recipients)
+            // Wolfgate: serialise once for the whole list; see ServerSendToAll.
+            if (recipients.Count < 2 || !_config.GetCVar(CVars.NetBroadcastSerializeOnce))
             {
-                ServerSendMessage(message, channel);
+                foreach (var channel in recipients)
+                {
+                    ServerSendMessage(message, channel);
+                }
+
+                return;
+            }
+
+            byte[]? payload = null;
+            var payloadBits = 0;
+            foreach (var recipient in recipients)
+            {
+                if (recipient is not NetChannel channel)
+                    throw new ArgumentException($"Not of type {typeof(NetChannel).FullName}", nameof(recipients));
+
+                payload ??= BuildPayload(message, channel, out payloadBits);
+                CoreSendMessage(channel, message, payload, payloadBits);
             }
         }
 
