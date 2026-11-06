@@ -155,12 +155,12 @@ public sealed partial class EntityLookupSystem
 
         if ((flags & LookupFlags.Dynamic) != 0x0)
         {
-            lookup.DynamicTree.QueryAabb(ref state, PhysicsQuery, localAABB, true);
+            lookup.DynamicTree.QueryAabb(ref state, PhysicsQuery, localAABB, false);
         }
 
         if ((flags & LookupFlags.Static) != 0x0)
         {
-            lookup.StaticTree.QueryAabb(ref state, PhysicsQuery, localAABB, true);
+            lookup.StaticTree.QueryAabb(ref state, PhysicsQuery, localAABB, false);
         }
 
         if ((flags & LookupFlags.StaticSundries) == LookupFlags.StaticSundries)
@@ -292,7 +292,7 @@ public sealed partial class EntityLookupSystem
 
         if ((flags & LookupFlags.Dynamic) != 0x0)
         {
-            lookup.DynamicTree.QueryAabb(ref state, PhysicsQuery, localAABB, true);
+            lookup.DynamicTree.QueryAabb(ref state, PhysicsQuery, localAABB, false);
 
             if (state.Found)
                 return true;
@@ -300,7 +300,7 @@ public sealed partial class EntityLookupSystem
 
         if ((flags & LookupFlags.Static) != 0x0)
         {
-            lookup.StaticTree.QueryAabb(ref state, PhysicsQuery, localAABB, true);
+            lookup.StaticTree.QueryAabb(ref state, PhysicsQuery, localAABB, false);
 
             if (state.Found)
                 return true;

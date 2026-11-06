@@ -414,7 +414,8 @@ namespace Robust.Shared.Physics.Systems
             // If it's the same broadphase as our body's one then don't need to translate the AABB.
             if (proxyBroad.Owner == broadphase)
             {
-                aabb = proxy.AABB;
+                // Wolfgate: pairs are found on the fat box, so a body is paired once per margin crossing, not per move.
+                aabb = proxy.FatAABB;
             }
             else
             {
@@ -633,7 +634,7 @@ namespace Robust.Shared.Physics.Systems
             {
                 var proxy = MoveBuffer[index];
                 var broadphaseUid = XformQuery.GetComponent(proxy.Entity).Broadphase?.Uid;
-                var worldAABB = TransformSys.GetWorldMatrix(broadphaseUid!.Value).TransformBox(proxy.AABB);
+                var worldAABB = TransformSys.GetWorldMatrix(broadphaseUid!.Value).TransformBox(proxy.FatAABB);
 
                 var mapUid = XformQuery.GetComponent(proxy.Entity).MapUid ?? EntityUid.Invalid;
 

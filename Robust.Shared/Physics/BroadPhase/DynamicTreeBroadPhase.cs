@@ -28,12 +28,13 @@ public sealed class DynamicTreeBroadPhase : IBroadPhase
 
     public Box2 GetFatAabb(DynamicTree.Proxy proxy)
     {
-        return _tree.GetUserData(proxy)!.AABB;
+        return _tree.GetUserData(proxy)!.FatAABB;
     }
 
     public DynamicTree.Proxy AddProxy(ref FixtureProxy proxy)
     {
-        var proxyId = _tree.CreateProxy(proxy.AABB, uint.MaxValue, proxy);
+        // Wolfgate: the tree node holds the fat box; exact queries still test the proxy's own AABB.
+        var proxyId = _tree.CreateProxy(proxy.FatAABB, uint.MaxValue, proxy);
         return proxyId;
     }
 

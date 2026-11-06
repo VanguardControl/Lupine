@@ -28,6 +28,7 @@ namespace Robust.Shared.GameObjects
         [Dependency] private SharedPhysicsSystem _physics = default!;
         [Dependency] private SharedTransformSystem _transform = default!;
         [Dependency] private MetaDataSystem _meta = default!;
+        [Dependency] private Robust.Shared.Configuration.IConfigurationManager _cfg = default!;
 
         private EntityQuery<FixturesComponent> _fixturesQuery;
         private EntityQuery<MapComponent> _mapQuery;
@@ -56,6 +57,8 @@ namespace Robust.Shared.GameObjects
         public override void Initialize()
         {
             base.Initialize();
+
+            Subs.CVar(_cfg, CVars.MapAnchoredSwapRemove, value => MapChunk.SwapRemoveAnchored = value, true);
 
             _fixturesQuery = GetEntityQuery<FixturesComponent>();
             _mapQuery = GetEntityQuery<MapComponent>();
