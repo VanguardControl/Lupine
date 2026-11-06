@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Microsoft.Extensions.ObjectPool;
 using Robust.Shared.GameObjects;
+using Robust.Shared.Maths;
 using Robust.Shared.Physics.Components;
 using Robust.Shared.Physics.Dynamics;
 using Robust.Shared.Physics.Dynamics.Contacts;
@@ -750,6 +751,7 @@ public abstract partial class SharedPhysicsSystem
     {
         var bodyCount = island.Bodies.Count;
         var positions = ArrayPool<Vector2>.Shared.Rent(bodyCount);
+        var origins = ArrayPool<Vector2d>.Shared.Rent(bodyCount);
         var angles = ArrayPool<float>.Shared.Rent(bodyCount);
         var offset = island.Offset;
         var gravity = Gravity;
@@ -760,10 +762,15 @@ public abstract partial class SharedPhysicsSystem
             var bodyEnt = island.Bodies[i];
             var body = bodyEnt.Comp1;
             var xform = bodyEnt.Comp2;
-            var (worldPos, worldRot) =
-                _transform.GetWorldPositionRotation(xform);
+            // Solve relative to an origin near the body, reached in doubles, so a body far from the map origin keeps
+            // the sub-centimetre position that float world coordinates can't hold. Contacts and joints only use
+            // differences of positions, so a shared origin per island changes nothing else. Lone bodies share no
+            // constraints and each get their own origin.
+            var (worldPosD, worldRotD) = _transform.GetWorldPositionRotationPrecise(xform);
+            origins[i] = i == 0 || island.LoneIsland ? worldPosD : origins[0];
+            var worldPos = new Vector2((float) (worldPosD.X - origins[i].X), (float) (worldPosD.Y - origins[i].Y));
 
-            var transform = new Transform(worldPos, worldRot);
+            var transform = new Transform(worldPos, (float) worldRotD);
             var position = Physics.Transform.Mul(transform, body.LocalCenter);
             // DebugTools.Assert(!float.IsNaN(position.X) && !float.IsNaN(position.Y));
             var angle = transform.Quaternion2D.Angle;
@@ -924,6 +931,7 @@ public abstract partial class SharedPhysicsSystem
                 int offset,
                 List<Entity<PhysicsComponent, TransformComponent>> bodies,
                 Vector2[] positions,
+                Vector2d[] origins,
                 float[] angles,
                 Vector2[] solvedPositions,
                 float[] solvedAngles)
@@ -942,6 +950,7 @@ public abstract partial class SharedPhysicsSystem
                         offset,
                         bodies,
                         positions,
+                        origins,
                         angles,
                         solvedPositions,
                         solvedAngles);
@@ -955,13 +964,14 @@ public abstract partial class SharedPhysicsSystem
                 offset,
                 bodies,
                 positions,
+                origins,
                 angles,
                 solvedPositions,
                 solvedAngles);
         }
         else
         {
-            FinalisePositions(0, bodyCount, offset, bodies, positions, angles, solvedPositions, solvedAngles);
+            FinalisePositions(0, bodyCount, offset, bodies, positions, origins, angles, solvedPositions, solvedAngles);
         }
 
         // Check sleep status for all of the bodies
@@ -1036,12 +1046,13 @@ public abstract partial class SharedPhysicsSystem
 
         // Cleanup
         ArrayPool<Vector2>.Shared.Return(positions);
+        ArrayPool<Vector2d>.Shared.Return(origins);
         ArrayPool<float>.Shared.Return(angles);
         ArrayPool<ContactVelocityConstraint>.Shared.Return(velocityConstraints);
         ArrayPool<ContactPositionConstraint>.Shared.Return(positionConstraints);
     }
 
-    private void FinalisePositions(int start, int end, int offset, List<Entity<PhysicsComponent, TransformComponent>> bodies, Vector2[] positions, float[] angles, Vector2[] solvedPositions, float[] solvedAngles)
+    private void FinalisePositions(int start, int end, int offset, List<Entity<PhysicsComponent, TransformComponent>> bodies, Vector2[] positions, Vector2d[] origins, float[] angles, Vector2[] solvedPositions, float[] solvedAngles)
     {
         for (var i = start; i < end; i++)
         {
@@ -1057,15 +1068,16 @@ public abstract partial class SharedPhysicsSystem
             if (!TryComp(xform.ParentUid, out TransformComponent? transform))
                 continue;
 
-            var (_, parentRot, parentInvMatrix) = _transform.GetWorldPositionRotationInvMatrix(transform);
-            var worldRot = (float) (parentRot + xform._localRotation);
+            var (parentPos, parentRot) = _transform.GetWorldPositionRotationPrecise(transform);
+            var worldRot = (float) (parentRot + xform._localRotation.Theta);
 
             var angle = angles[i];
 
             var q = new Quaternion2D(angle);
             var adjustedPosition = positions[i] - Physics.Transform.Mul(q, body.LocalCenter);
 
-            var solvedPosition = Vector2.Transform(adjustedPosition, parentInvMatrix);
+            // Back to local coordinates in doubles; see the origin note in SolveIsland.
+            var solvedPosition = SharedTransformSystem.WorldToLocalPrecise(origins[i], adjustedPosition, parentPos, parentRot);
             solvedPositions[offset + i] = solvedPosition - xform.LocalPosition;
             solvedAngles[offset + i] = angle - worldRot;
         }
