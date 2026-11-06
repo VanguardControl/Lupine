@@ -324,6 +324,11 @@ public abstract partial class SharedContainerSystem
         if (!xform.ParentUid.Valid)
             return false;
 
+        // Wolfgate: grids and maps are never in a container, so stop at the first one instead of walking to the root.
+        // This runs on every move of every entity.
+        if (xform.ParentUid == xform.GridUid || xform.ParentUid == xform.MapUid)
+            return false;
+
         return IsEntityOrParentInContainer(xform.ParentUid);
     }
 

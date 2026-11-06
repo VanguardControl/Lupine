@@ -417,6 +417,9 @@ namespace Robust.Server
 
             _modLoader.BroadcastRunLevel(ModRunLevel.PostInit);
 
+            if (_config.GetCVar(CVars.SerializationPrecompile))
+                PrecompileSerializers();
+
             _statusHost.Start();
             _hubManager.Start();
 
@@ -439,6 +442,40 @@ namespace Robust.Server
             ProgramShared.RunExecCommands(_consoleHost, _commandLineArgs?.ExecCommands);
 
             return false;
+        }
+
+        /// <summary>
+        /// Wolfgate: writes a default instance of every registered component on a worker thread, so the serializer
+        /// compiles its write delegates now instead of on the main thread during the first grid save of the round.
+        /// </summary>
+        private void PrecompileSerializers()
+        {
+            var types = _componentFactory.AllRegisteredTypes.ToArray();
+            var dependencies = IoCManager.Instance!;
+            var sawmill = _logger;
+
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                IoCManager.InitThread(dependencies, replaceExisting: true);
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                var failed = 0;
+
+                foreach (var type in types)
+                {
+                    try
+                    {
+                        var instance = _componentFactory.GetComponent(type);
+                        _serialization.WriteValue(type, instance, alwaysWrite: true);
+                    }
+                    catch (Exception)
+                    {
+                        // A type the serializer can't write from a default instance compiles on first real use instead.
+                        failed++;
+                    }
+                }
+
+                sawmill.Debug($"Precompiled serializers for {types.Length - failed} component types in {watch.ElapsedMilliseconds} ms ({failed} skipped).");
+            });
         }
 
         private void AddFinalStringsToSerializer()
