@@ -434,6 +434,11 @@ public abstract partial class SharedPhysicsSystem
                 continue;
             }
 
+            // Wolfgate: a pair of sleeping bodies never reaches the solver, so skip it before touching transforms,
+            // filters or proxies. The same test further down stays for contacts that pass the checks between.
+            if (!(bodyA.Awake && bodyA.BodyType != BodyType.Static) && !(bodyB.Awake && bodyB.BodyType != BodyType.Static))
+                continue;
+
             var xformA = contact.XformA!;
             var xformB = contact.XformB!;
 
@@ -524,7 +529,8 @@ public abstract partial class SharedPhysicsSystem
             {
                 if (broadphaseA == broadphaseB)
                 {
-                    overlap = proxyA.AABB.Intersects(proxyB.AABB);
+                    // Wolfgate: fat boxes, so a contact lives as long as the broadphase pair would be found again.
+                    overlap = proxyA.FatAABB.Intersects(proxyB.FatAABB);
                 }
                 else
                 {
@@ -532,8 +538,8 @@ public abstract partial class SharedPhysicsSystem
                     // Instead of transforming both boxes (which enlarges both aabbs), maybe just transform one box.
                     // I.e. use (matrixA * invMatrixB).TransformBox(). Or (invMatrixB * matrixA), whichever is correct.
                     // Alternatively, maybe just directly construct the relative transform matrix?
-                    var proxyAWorldAABB = _transform.GetWorldMatrix(XformQuery.GetComponent(broadphaseA.Value)).TransformBox(proxyA.AABB);
-                    var proxyBWorldAABB = _transform.GetWorldMatrix(XformQuery.GetComponent(broadphaseB.Value)).TransformBox(proxyB.AABB);
+                    var proxyAWorldAABB = _transform.GetWorldMatrix(XformQuery.GetComponent(broadphaseA.Value)).TransformBox(proxyA.FatAABB);
+                    var proxyBWorldAABB = _transform.GetWorldMatrix(XformQuery.GetComponent(broadphaseB.Value)).TransformBox(proxyB.FatAABB);
                     overlap = proxyAWorldAABB.Intersects(proxyBWorldAABB);
                 }
             }

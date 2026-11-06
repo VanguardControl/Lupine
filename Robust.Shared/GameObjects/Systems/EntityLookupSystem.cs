@@ -72,7 +72,14 @@ public record struct WorldAABBEvent
 
 public sealed partial class EntityLookupSystem : EntitySystem
 {
+    [Dependency] private Robust.Shared.Configuration.IConfigurationManager _cfg = default!;
     [Dependency] private IManifoldManager _manifoldManager = default!;
+
+    /// <summary>
+    /// Wolfgate: metres added around a fixture's exact box to make the fat box stored in the broadphase tree.
+    /// See <see cref="CVars.PhysicsBroadphaseMargin"/>.
+    /// </summary>
+    private float _broadphaseMargin;
     [Dependency] private IGameTiming _timing = default!;
     [Dependency] private INetManager _netMan = default!;
     [Dependency] private SharedContainerSystem _container = default!;
@@ -132,6 +139,8 @@ public sealed partial class EntityLookupSystem : EntitySystem
         SubscribeLocalEvent<TransformComponent, PhysicsBodyTypeChangedEvent>(OnBodyTypeChange);
         SubscribeLocalEvent<PhysicsComponent, ComponentStartup>(OnBodyStartup);
         SubscribeLocalEvent<CollisionChangeEvent>(OnPhysicsUpdate);
+
+        Subs.CVar(_cfg, CVars.PhysicsBroadphaseMargin, value => _broadphaseMargin = MathF.Max(0f, value), true);
     }
 
     private void OnBodyStartup(EntityUid uid, PhysicsComponent component, ComponentStartup args)
@@ -501,13 +510,21 @@ public sealed partial class EntityLookupSystem : EntitySystem
                 var proxy = fixture.Proxies[i];
                 DebugTools.Assert(ReferenceEquals(tree.GetProxy(proxy.ProxyId), proxy),
                     "Moving a fixture proxy in a tree that does not own it.");
-                // Only move if the fat AABB changes. Saves array lookup + change.
+
+                // Wolfgate: the tree holds a fat box. A body that moved but stayed inside it is neither reinserted nor
+                // re-paired, so slow movement no longer costs a tree move and a pair search every tick. Anything that
+                // destroyed the proxy's contacts first (a grid changing map) flags it so it is re-queued regardless.
                 if (!proxy.AABB.Equals(bounds))
                 {
-                    tree.MoveProxy(proxy.ProxyId, bounds);
                     proxy.AABB = bounds;
+                    if (_broadphaseMargin > 0f && !proxy.ForceRequeue && Encloses(proxy.FatAABB, bounds))
+                        continue;
+
+                    proxy.FatAABB = bounds.Enlarged(_broadphaseMargin);
+                    tree.MoveProxy(proxy.ProxyId, proxy.FatAABB);
                 }
 
+                proxy.ForceRequeue = false;
                 moveBuffer.Add(proxy);
             }
 
@@ -521,6 +538,7 @@ public sealed partial class EntityLookupSystem : EntitySystem
         {
             var bounds = fixture.Shape.ComputeAABB(broadphaseTransform, i);
             var proxy = new FixtureProxy(ent.Owner, ent.Comp1, ent.Comp2, bounds, fixtureId, fixture, i);
+            proxy.FatAABB = bounds.Enlarged(_broadphaseMargin);
             proxy.ProxyId = tree.AddProxy(ref proxy);
             proxy.AABB = bounds;
             proxies[i] = proxy;
@@ -530,6 +548,13 @@ public sealed partial class EntityLookupSystem : EntitySystem
         fixture.Proxies = proxies;
         fixture.ProxyCount = count;
         fixture.ProxyTree = tree;
+    }
+
+    /// <summary>Wolfgate: whether <paramref name="outer"/> contains all of <paramref name="inner"/>.</summary>
+    private static bool Encloses(in Box2 outer, in Box2 inner)
+    {
+        return outer.Left <= inner.Left && outer.Bottom <= inner.Bottom
+            && outer.Right >= inner.Right && outer.Top >= inner.Top;
     }
 
     private void AddOrUpdateSundriesTree(EntityUid broadUid, BroadphaseComponent broadphase, EntityUid uid, TransformComponent xform, bool staticBody, Box2? aabb = null)
@@ -689,7 +714,10 @@ public sealed partial class EntityLookupSystem : EntitySystem
             {
                 for (var i = 0; i < fixture.ProxyCount; i++)
                 {
-                    buffer.Remove(fixture.Proxies[i]);
+                    var proxy = fixture.Proxies[i];
+                    buffer.Remove(proxy);
+                    // Contacts go next, so the proxy must be re-paired on the destination map even if it hasn't moved.
+                    proxy.ForceRequeue = true;
                 }
             }
         }

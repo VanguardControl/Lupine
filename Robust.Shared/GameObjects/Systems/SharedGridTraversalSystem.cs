@@ -16,6 +16,12 @@ public sealed partial class SharedGridTraversalSystem : EntitySystem
     [Dependency] private SharedMapSystem _mapSystem = default!;
     [Dependency] private SharedTransformSystem _transform = default!;
     [Dependency] private IGameTiming _timing = default!;
+    [Dependency] private Robust.Shared.Configuration.IConfigurationManager _cfg = default!;
+
+    private EntityQuery<MapGridComponent> _gridQuery;
+
+    /// <summary>Wolfgate: see <see cref="CVars.PhysicsTraversalTileFastPath"/>.</summary>
+    private bool _tileFastPath;
 
     private EntityUid _recursionGuard;
 
@@ -32,6 +38,8 @@ public sealed partial class SharedGridTraversalSystem : EntitySystem
     {
         base.Initialize();
         SubscribeLocalEvent<TransformStartupEvent>(OnStartup);
+        _gridQuery = GetEntityQuery<MapGridComponent>();
+        Subs.CVar(_cfg, CVars.PhysicsTraversalTileFastPath, value => _tileFastPath = value, true);
     }
 
     private void OnStartup(ref TransformStartupEvent ev)
@@ -91,6 +99,15 @@ public sealed partial class SharedGridTraversalSystem : EntitySystem
         // TODO: This should probably check center of mass.
         DebugTools.Assert(!HasComp<MapGridComponent>(entity));
         DebugTools.Assert(!HasComp<MapComponent>(entity));
+
+        // Wolfgate: a body over a non-empty tile of the grid it is already on stays there, without the map-wide grid
+        // lookup. Where two grids overlap this keeps the current one instead of letting the lookup pick.
+        if (_tileFastPath && xform.ParentUid == xform.GridUid && _gridQuery.TryGetComponent(xform.ParentUid, out var ownGrid))
+        {
+            var indices = _mapSystem.TileIndicesFor(xform.ParentUid, ownGrid, new EntityCoordinates(xform.ParentUid, xform.LocalPosition));
+            if (_mapSystem.TryGetTileRef(xform.ParentUid, ownGrid, indices, out var tileRef) && !tileRef.Tile.IsEmpty)
+                return;
+        }
 
         var mapPos = xform.ParentUid == xform.MapUid
             ? xform.LocalPosition

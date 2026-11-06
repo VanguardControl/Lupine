@@ -202,8 +202,29 @@ namespace Robust.Shared.Map
                 throw new ArgumentOutOfRangeException(nameof(yCell), "Tile indices out of bounds.");
 
             ref var cell = ref _snapGrid[xCell, yCell];
-            cell.Center?.Remove(euid);
+            if (cell.Center == null)
+                return;
+
+            // Wolfgate: mass unanchors paid a shift per removal; swapping the last entry in is O(1).
+            if (!SwapRemoveAnchored)
+            {
+                cell.Center.Remove(euid);
+                return;
+            }
+
+            var index = cell.Center.IndexOf(euid);
+            if (index < 0)
+                return;
+
+            var last = cell.Center.Count - 1;
+            cell.Center[index] = cell.Center[last];
+            cell.Center.RemoveAt(last);
         }
+
+        /// <summary>
+        /// Wolfgate: whether <see cref="RemoveFromSnapGridCell"/> swap-removes. Set from <c>map.anchored_swap_remove</c>.
+        /// </summary>
+        public static bool SwapRemoveAnchored;
 
         /// <inheritdoc />
         public override string ToString()
