@@ -55,6 +55,19 @@ public sealed partial class NetManager
         NetChannel channel,
         NetMessage message)
     {
+        CoreSendMessage(channel, message, null, 0);
+    }
+
+    /// <summary>
+    /// Wolfgate: with <paramref name="payload"/> set, the message bytes were serialised once for a broadcast and are
+    /// copied into this recipient's packet instead of being serialised again.
+    /// </summary>
+    private void CoreSendMessage(
+        NetChannel channel,
+        NetMessage message,
+        byte[]? payload,
+        int payloadBits)
+    {
         if (!channel.IsConnected)
         {
             _logger.Error(
@@ -62,7 +75,7 @@ public sealed partial class NetManager
             return;
         }
 
-        var packet = BuildMessage(message, channel);
+        var packet = payload == null ? BuildMessage(message, channel) : BuildMessage(payload, payloadBits, channel);
         var method = message.DeliveryMethod;
         var seqChannel = message.SequenceChannel;
 
