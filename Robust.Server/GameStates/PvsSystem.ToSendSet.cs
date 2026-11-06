@@ -77,6 +77,9 @@ internal sealed partial class PvsSystem
         if (data.LastSeen == _gameTiming.CurTick)
             return;
 
+        if (IsHeldBackAfterEviction(ref data, fromTick))
+            return;
+
         if (meta.LifeStage >= EntityLifeStage.Terminating)
         {
             Log.Error($"Attempted to send deleted entity: {ToPrettyString(ent.Uid)}, Meta lifestage: {ent.Meta.EntityLifeStage}, PVS lifestage: {meta.LifeStage}.\n{Environment.StackTrace}");
@@ -127,6 +130,9 @@ internal sealed partial class PvsSystem
 
         if (data.LastSeen == _gameTiming.CurTick)
             return true;
+
+        if (IsHeldBackAfterEviction(ref data, fromTick))
+            return false;
 
         var (entered,budgetExceeded) = IsEnteringPvsRange(ref data, fromTick, ref session.Budget);
 

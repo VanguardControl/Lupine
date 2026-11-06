@@ -203,6 +203,10 @@ internal sealed partial class PvsSystem
     private void ClearPlayerPvsData(PvsSession session)
     {
         session.DataMemory.Clear();
+
+        // The client is about to receive a full state and drop everything else, so pending evictions are moot.
+        session.Evicted.Clear();
+        session.EvictionCursor = 0;
     }
 
     /// <summary>

@@ -41,11 +41,17 @@ internal sealed partial class PvsSystem
         UpdateSession(session);
 
         if (CullingEnabled && !session.DisableCulling)
+        {
+            if (!session.RequestedFull)
+                SweepEvictions(session);
+
             GetEntityStates(session);
+        }
         else
             GetAllEntityStates(session);
 
         _playerManager.GetPlayerStates(session.FromTick, session.PlayerStates);
+        BuildDeletions(session);
 
         // lastAck varies with each client based on lag and such, we can't just make 1 global state and send it to everyone
 
@@ -56,7 +62,7 @@ internal sealed partial class PvsSystem
             Math.Max(session.LastInput, session.LastMessage),
             session.States,
             session.PlayerStates,
-            _deletedEntities);
+            session.Deletions);
 
         session.ForceSendReliably = session.RequestedFull
                                           || _gameTiming.CurTick > session.LastReceivedAck + (uint) ForceAckThreshold;
