@@ -454,7 +454,9 @@ namespace Robust.Server
             var dependencies = IoCManager.Instance!;
             var sawmill = _logger;
 
-            System.Threading.Tasks.Task.Run(() =>
+            // A dedicated thread, not the pool: InitThread binds this server's IoC context to the thread, and a pooled
+            // thread would carry it into other work (integration tests run several servers in one process).
+            var thread = new Thread(() =>
             {
                 IoCManager.InitThread(dependencies, replaceExisting: true);
                 var watch = System.Diagnostics.Stopwatch.StartNew();
@@ -479,7 +481,13 @@ namespace Robust.Server
                 }
 
                 sawmill.Debug($"Precompiled serializers for {types.Length - failed} component types in {watch.ElapsedMilliseconds} ms ({failed} skipped).");
-            });
+            })
+            {
+                IsBackground = true,
+                Name = "Serializer precompile",
+                Priority = ThreadPriority.BelowNormal,
+            };
+            thread.Start();
         }
 
         private void AddFinalStringsToSerializer()
