@@ -1533,9 +1533,10 @@ namespace Robust.Shared
 
         /// <summary>
         /// Whether a batch of incoming encrypted packets is decrypted in parallel before being handled in order.
+        /// Off until a test server has run it: integration tests use an in-memory network and never reach this path.
         /// </summary>
         public static readonly CVarDef<bool> NetParallelDecrypt =
-            CVarDef.Create("net.parallel_decrypt", true, CVar.ARCHIVE);
+            CVarDef.Create("net.parallel_decrypt", false, CVar.ARCHIVE);
 
         /// <summary>
         /// Encrypted packets a batch needs before it is decrypted in parallel; smaller batches stay on the main thread.

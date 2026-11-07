@@ -434,11 +434,6 @@ public abstract partial class SharedPhysicsSystem
                 continue;
             }
 
-            // Wolfgate: a pair of sleeping bodies never reaches the solver, so skip it before touching transforms,
-            // filters or proxies. The same test further down stays for contacts that pass the checks between.
-            if (!(bodyA.Awake && bodyA.BodyType != BodyType.Static) && !(bodyB.Awake && bodyB.BodyType != BodyType.Static))
-                continue;
-
             var xformA = contact.XformA!;
             var xformB = contact.XformB!;
 
