@@ -466,6 +466,10 @@ namespace Robust.Server
                     {
                         var instance = _componentFactory.GetComponent(type);
                         _serialization.WriteValue(type, instance, alwaysWrite: true);
+
+                        // Map loads copy each component into the entity as IComponent; compile and run that path once too.
+                        if (instance is IComponent source && _componentFactory.GetComponent(type) is IComponent target)
+                            _serialization.CopyTo(source, ref target, skipHook: true, notNullableOverride: true);
                     }
                     catch (Exception)
                     {
