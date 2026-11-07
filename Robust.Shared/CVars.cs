@@ -1497,18 +1497,21 @@ namespace Robust.Shared
 
         /// <summary>
         /// Margin in metres added around a fixture's box in the broadphase tree. A body is only reinserted and
-        /// re-paired once its exact box leaves the fat one, instead of on every move. 0 restores exact boxes.
-        /// Read by shared code, so registered on both sides but not replicated: a stock client never learns of it.
+        /// re-paired once its exact box leaves the fat one, instead of on every move. 0 (the default) keeps exact
+        /// boxes: with 0.1 the swept ship-round test detonates behind the wall it should stop at, cause not yet
+        /// found, so it is opt-in for a test server. Read by shared code, so registered on both sides but not
+        /// replicated: a stock client never learns of it.
         /// </summary>
         public static readonly CVarDef<float> PhysicsBroadphaseMargin =
-            CVarDef.Create("physics.broadphase_margin", 0.1f, CVar.ARCHIVE);
+            CVarDef.Create("physics.broadphase_margin", 0f, CVar.ARCHIVE);
 
         /// <summary>
         /// Whether a body standing on a non-empty tile of its own grid skips the map-wide grid lookup on each move.
-        /// Changes which grid wins when two overlap: the current one stays.
+        /// Changes which grid wins when two overlap: the current one stays, where the lookup may pick the other. Off by
+        /// default because content's gravity test encodes the lookup's choice; opt-in for a test server.
         /// </summary>
         public static readonly CVarDef<bool> PhysicsTraversalTileFastPath =
-            CVarDef.Create("physics.traversal_tile_fast_path", true, CVar.ARCHIVE);
+            CVarDef.Create("physics.traversal_tile_fast_path", false, CVar.ARCHIVE);
 
         /// <summary>
         /// Whether pausing an entity puts its awake body to sleep until it is unpaused, so paused bodies cost
