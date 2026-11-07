@@ -22,6 +22,11 @@ internal sealed partial class PvsSystem
 
     private void OnEvictBudgetChanged(int value) => _evictBudget = Math.Max(0, value);
 
+    private void OnEvictScanChanged(int value) => _evictScanSlots = Math.Max(1, value);
+
+    /// <summary>Slots one sweep scans per session; see <see cref="CVars.NetPvsEvictScan"/>.</summary>
+    private int _evictScanSlots = 16384;
+
     private uint SecondsToTicks(float seconds)
     {
         return seconds <= 0 ? 0 : (uint) Math.Ceiling(seconds * _gameTiming.TickRate);
@@ -49,7 +54,10 @@ internal sealed partial class PvsSystem
         var budget = _evictBudget;
         var evicted = 0;
 
-        for (var n = 0; n < size && budget > 0; n++)
+        // A slice of the table per sweep, carried on from where the last one stopped: a full scan of 600k slots for
+        // every session was 24 ms/s on the state-sending threads.
+        var scan = Math.Min(size, _evictScanSlots);
+        for (var n = 0; n < scan && budget > 0; n++)
         {
             if (cursor >= size)
                 cursor = 0;

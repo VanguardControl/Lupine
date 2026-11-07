@@ -291,7 +291,15 @@ namespace Robust.Shared
         /// Seconds between sweeps of one client's held entities for eviction. See <see cref="NetPvsEvictSeconds"/>.
         /// </summary>
         public static readonly CVarDef<float> NetPvsEvictInterval =
-            CVarDef.Create("net.pvs_evict_interval", 5f, CVar.ARCHIVE | CVar.SERVERONLY);
+            CVarDef.Create("net.pvs_evict_interval", 1f, CVar.ARCHIVE | CVar.SERVERONLY);
+
+        /// <summary>
+        /// Entity slots one sweep scans per client before stopping; the next sweep carries on where it left off. Keeps
+        /// a sweep cheap at 600k entities: 16k slots a second covers the table in about 40 s, well inside the
+        /// eviction age. A full-table scan per sweep cost 24 ms/s at 100 players.
+        /// </summary>
+        public static readonly CVarDef<int> NetPvsEvictScan =
+            CVarDef.Create("net.pvs_evict_scan", 16384, CVar.ARCHIVE | CVar.SERVERONLY);
 
         /// <summary>
         /// Most entities one sweep evicts from a client, so the client never deletes a large batch in one frame.
