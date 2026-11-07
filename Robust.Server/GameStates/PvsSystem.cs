@@ -179,6 +179,7 @@ internal sealed partial class PvsSystem : EntitySystem
         Subs.CVar(_configManager, CVars.NetPvsEvictSeconds, OnEvictSecondsChanged, true);
         Subs.CVar(_configManager, CVars.NetPvsEvictInterval, OnEvictIntervalChanged, true);
         Subs.CVar(_configManager, CVars.NetPvsEvictBudget, OnEvictBudgetChanged, true);
+        Subs.CVar(_configManager, CVars.NetPvsEvictScan, OnEvictScanChanged, true);
 
         _serverGameStateManager.ClientAck += OnClientAck;
         _serverGameStateManager.ClientRequestFull += OnClientRequestFull;
