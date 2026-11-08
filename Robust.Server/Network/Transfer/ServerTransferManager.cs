@@ -14,7 +14,7 @@ using Robust.Shared.Network.Transfer;
 
 namespace Robust.Server.Network.Transfer;
 
-internal sealed class ServerTransferManager : BaseTransferManager, ITransferManager
+internal sealed class ServerTransferManager : BaseTransferManager, ITransferManager, IServerTransferStatus
 {
     internal const string TransferApiUrl = "/rt_transfer_init";
 
@@ -23,6 +23,12 @@ internal sealed class ServerTransferManager : BaseTransferManager, ITransferMana
     private readonly IServerNetManager _netManager;
 
     private readonly Dictionary<NetUserId, Player> _onlinePlayers = new();
+
+    /// <summary>
+    /// Wolfgate: players whose transfer socket failed to connect or dropped. They get the game connection straight away
+    /// on later joins, until the server restarts. Written from the socket threads, so locked.
+    /// </summary>
+    private readonly HashSet<NetUserId> _httpFailed = new();
 
     internal ServerTransferManager(IConfigurationManager cfg, IStatusHost statusHost, IServerNetManager netManager, ILogManager logManager, ITaskManager taskManager)
         : base(logManager, NetMessageAccept.Server, taskManager)
@@ -127,26 +133,105 @@ internal sealed class ServerTransferManager : BaseTransferManager, ITransferMana
 
         var transferHttpEnabled = _cfg.GetCVar(CVars.TransferHttp);
 
-        BaseTransferImpl impl;
-        if (transferHttpEnabled)
+        // Wolfgate: a player whose socket failed before gets the game connection straight away.
+        var knownBad = transferHttpEnabled && IsHttpFailed(channel.UserId);
+
+        if (!transferHttpEnabled || knownBad)
         {
-            impl = new ServerTransferImplWebSocket(Sawmill, this, _cfg, _netManager, channel);
-        }
-        else
-        {
-            impl = new TransferImplLidgren(Sawmill, channel, this, _netManager);
+            var lidgren = NewLidgren(channel);
+            _onlinePlayers.Add(channel.UserId, new Player
+            {
+                Impl = lidgren,
+                Mode = knownBad ? TransferChannelMode.WebSocketFailed : TransferChannelMode.GameConnection,
+            });
+
+            if (knownBad)
+                Sawmill.Info($"{channel}: using the game connection for transfers, as its socket failed earlier");
+
+            await lidgren.ServerInit();
+            return;
         }
 
-        impl.MaxChannelCount = _cfg.GetCVar(CVars.TransferStreamLimit);
+        var socket = new ServerTransferImplWebSocket(Sawmill, this, _cfg, _netManager, channel);
+        socket.MaxChannelCount = _cfg.GetCVar(CVars.TransferStreamLimit);
 
         var datum = new Player
         {
-            Impl = impl,
+            Impl = socket,
+            Mode = TransferChannelMode.WebSocket,
         };
 
         _onlinePlayers.Add(channel.UserId, datum);
 
-        await impl.ServerInit();
+        var connected = socket.ServerInit();
+
+        // Wolfgate: fall back to the game connection when the client can't reach the socket. A stock client takes a
+        // second transfer init and switches to it, so this needs nothing from the client. Before, the join hung.
+        var timeout = _cfg.GetCVar(CVars.TransferHttpFallbackSeconds);
+        if (timeout <= 0)
+        {
+            await connected;
+            return;
+        }
+
+        var finished = await Task.WhenAny(connected, Task.Delay(TimeSpan.FromSeconds(timeout)));
+        if (finished == connected || !await socket.TryAbandon())
+        {
+            // Connected, or connecting under the API lock as the timeout fired.
+            await connected;
+            return;
+        }
+
+        // Disconnected while waiting: the socket was disposed, as the stock code would have done.
+        if (!_onlinePlayers.TryGetValue(channel.UserId, out var current) || current != datum)
+            throw new TaskCanceledException();
+
+        Sawmill.Warning($"{channel}: transfer socket not reached in {timeout} s, falling back to the game connection");
+        MarkHttpFailed(channel.UserId);
+        socket.Dispose();
+
+        var fallback = NewLidgren(channel);
+        datum.Impl = fallback;
+        datum.Mode = TransferChannelMode.WebSocketFailed;
+        await fallback.ServerInit();
+    }
+
+    private TransferImplLidgren NewLidgren(INetChannel channel)
+    {
+        return new TransferImplLidgren(Sawmill, channel, this, _netManager)
+        {
+            MaxChannelCount = _cfg.GetCVar(CVars.TransferStreamLimit),
+        };
+    }
+
+    /// <inheritdoc />
+    public TransferChannelMode GetMode(NetUserId user)
+    {
+        return _onlinePlayers.TryGetValue(user, out var player) ? player.Mode : TransferChannelMode.GameConnection;
+    }
+
+    private bool IsHttpFailed(NetUserId user)
+    {
+        if (!_cfg.GetCVar(CVars.TransferHttpFallbackRemember))
+            return false;
+
+        lock (_httpFailed)
+        {
+            return _httpFailed.Contains(user);
+        }
+    }
+
+    private void MarkHttpFailed(NetUserId user)
+    {
+        lock (_httpFailed)
+        {
+            _httpFailed.Add(user);
+        }
+    }
+
+    internal override void TransferSocketLost(INetChannel channel)
+    {
+        MarkHttpFailed(channel.UserId);
     }
 
     public event Action ClientHandshakeComplete
@@ -160,6 +245,14 @@ internal sealed class ServerTransferManager : BaseTransferManager, ITransferMana
         if (!_onlinePlayers.Remove(e.Channel.UserId, out var player))
             return;
 
+        // Wolfgate: a stock client whose socket errors disconnects itself with this reason; next time it gets the game
+        // connection instead of another kick.
+        if (player.Mode == TransferChannelMode.WebSocket
+            && e.Reason.Contains("transfer socket", StringComparison.OrdinalIgnoreCase))
+        {
+            MarkHttpFailed(e.Channel.UserId);
+        }
+
         Sawmill.Debug("Cleaning up connection for channel {Player} that disconnected", e.Channel);
         player.Impl.Dispose();
     }
@@ -167,5 +260,8 @@ internal sealed class ServerTransferManager : BaseTransferManager, ITransferMana
     private sealed class Player
     {
         public required BaseTransferImpl Impl;
+
+        /// <summary>Wolfgate: which channel this player's transfers use; see <see cref="IServerTransferStatus"/>.</summary>
+        public TransferChannelMode Mode;
     }
 }

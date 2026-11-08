@@ -544,6 +544,20 @@ namespace Robust.Shared
             CVarDef.Create("transfer.stream_limit", 10, CVar.SERVERONLY);
 
         /// <summary>
+        /// Seconds a joining client has to reach the websocket transfer channel before the server switches it to the game
+        /// connection. A stock client follows the switch. 0 waits forever, as upstream does.
+        /// </summary>
+        public static readonly CVarDef<float> TransferHttpFallbackSeconds =
+            CVarDef.Create("transfer.http_fallback_seconds", 8f, CVar.SERVERONLY);
+
+        /// <summary>
+        /// Whether a player whose transfer socket failed or dropped gets the game connection straight away on later joins,
+        /// until the server restarts.
+        /// </summary>
+        public static readonly CVarDef<bool> TransferHttpFallbackRemember =
+            CVarDef.Create("transfer.http_fallback_remember", true, CVar.SERVERONLY);
+
+        /// <summary>
         /// Artificially delay transfer operations to simulate slow network. Debug option.
         /// </summary>
         internal static readonly CVarDef<bool> TransferArtificialDelay =

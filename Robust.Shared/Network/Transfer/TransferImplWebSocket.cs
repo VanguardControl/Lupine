@@ -118,6 +118,7 @@ internal abstract class TransferImplWebSocket : BaseTransferImpl
         try
         {
             Sawmill.Warning($"Lost transfer socket for {Channel}: {reason}");
+            Parent.TransferSocketLost(Channel);
         }
         catch (ObjectDisposedException)
         {

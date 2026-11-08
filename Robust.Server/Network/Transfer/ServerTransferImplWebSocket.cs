@@ -115,6 +115,20 @@ internal sealed class ServerTransferImplWebSocket : TransferImplWebSocket
         ReadThread();
     }
 
+    /// <summary>
+    /// Wolfgate: gives up on a client that never connected, so it can't connect later. False when the connection was
+    /// already made or is being made, in which case it goes ahead.
+    /// </summary>
+    public async Task<bool> TryAbandon()
+    {
+        using var _ = await _apiLock.WaitGuardAsync();
+        if (Key == null)
+            return false;
+
+        Key = null;
+        return true;
+    }
+
     public override void Dispose()
     {
         _connectTcs.TrySetCanceled();
