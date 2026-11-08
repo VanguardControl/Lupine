@@ -102,6 +102,7 @@ namespace Robust.Server
             deps.Register<ILocalizationManager, ServerLocalizationManager>();
             deps.Register<ILocalizationManagerInternal, ServerLocalizationManager>();
             deps.Register<ITransferManager, ServerTransferManager>();
+            deps.Register<IServerTransferStatus, ServerTransferManager>();
             deps.Register<ServerTransferTestManager>();
         }
     }
