@@ -466,7 +466,8 @@ internal sealed partial class PvsSystem : EntitySystem
         DebugTools.Assert(_chunks.Values.All(x => Exists(x.Map) && Exists(x.Root)));
         DebugTools.Assert(_chunkSets.Keys.All(Exists));
 
-        // Eviction sweeps read every session data slot, so the job clearing freed slots must be done first.
+        // Eviction sweeps read every session data slot, so the job clearing freed slots must be done first. Already
+        // waited for in ProcessDisconnections; kept so a caller that skips that still can't race the job.
         WaitDeletionTask();
 
         _rangeLimitedRoots.Clear();
@@ -492,6 +493,10 @@ internal sealed partial class PvsSystem : EntitySystem
     {
         WaitSendTask();
         WaitLeaveTask();
+
+        // Lupine: the deletions job walks every session's data; freeing a leaving session's memory, or adding a new
+        // session (CacheSessionData, next), while it runs read freed memory and crashed the process.
+        WaitDeletionTask();
 
         foreach (var session in _disconnected)
         {
