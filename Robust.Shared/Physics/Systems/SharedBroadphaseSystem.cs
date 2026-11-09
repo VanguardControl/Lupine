@@ -27,6 +27,7 @@ namespace Robust.Shared.Physics.Systems
 
         private EntityQuery<BroadphaseComponent> _broadphaseQuery;
         private EntityQuery<FixturesComponent> _fixturesQuery;
+        private readonly List<EntityUid> _bodilessGrids = new();
         private EntityQuery<MapGridComponent> _gridQuery;
         private EntityQuery<PhysicsComponent> _physicsQuery;
         private EntityQuery<TransformComponent> _xformQuery;
@@ -142,6 +143,37 @@ namespace Robust.Shared.Physics.Systems
             }
         }
 
+        /// <summary>
+        /// Lupine: drops moved grids that can't collide (deleted, or a map's own grid moved by content, which has no
+        /// body). Left in, the lookups below throw every substep and physics stops for the whole server.
+        /// </summary>
+        private void PruneBodilessGrids(HashSet<EntityUid> movedGrids)
+        {
+            foreach (var uid in movedGrids)
+            {
+                if (_gridQuery.HasComp(uid)
+                    && _xformQuery.HasComp(uid)
+                    && _physicsQuery.HasComp(uid)
+                    && _fixturesQuery.HasComp(uid))
+                {
+                    continue;
+                }
+
+                _bodilessGrids.Add(uid);
+            }
+
+            if (_bodilessGrids.Count == 0)
+                return;
+
+            foreach (var uid in _bodilessGrids)
+            {
+                movedGrids.Remove(uid);
+                Log.Error($"Moved grid {ToPrettyString(uid)} has no physics body or fixtures; skipping its contacts.");
+            }
+
+            _bodilessGrids.Clear();
+        }
+
         private float GetBroadphaseExpand(PhysicsComponent body, float frameTime)
         {
             return body.LinearVelocity.Length() * 1.2f * frameTime;
@@ -189,6 +221,8 @@ namespace Robust.Shared.Physics.Systems
 
             var moveBuffer = _physicsSystem.MoveBuffer;
             var movedGrids = _physicsSystem.MovedGrids;
+
+            PruneBodilessGrids(movedGrids);
 
             // Find any entities being driven over that might need to be considered
             FindGridContacts(movedGrids);
