@@ -114,6 +114,7 @@ namespace Robust.Shared.Network
         [Dependency] private HttpClientHolder _http = default!;
         [Dependency] private IHWId _hwId = default!;
         [Dependency] private ITransferManager _transfer = default!;
+        private NetTrafficStats? _trafficStats; // Wolfgate: net stats, optional so hand-built test containers need not register it
 
         /// <summary>
         ///     Whether we bother to log problematic packets. Set by <see cref="CVars.NetLogging"/>.
@@ -254,6 +255,7 @@ namespace Robust.Shared.Network
         /// <inheritdoc />
         public void Initialize(bool isServer)
         {
+            IoCManager.Instance?.TryResolveType(out _trafficStats); // Wolfgate: net stats
             if (_initialized)
             {
                 throw new InvalidOperationException("NetManager has already been initialized.");
@@ -1371,6 +1373,19 @@ namespace Robust.Shared.Network
             packet.Write(payload);
             packet.LengthBits = lengthBits;
             return packet;
+        }
+
+        /// <summary>Wolfgate: a channel's reliable messages sent and resent so far, for spotting lossy links.</summary>
+        public bool TryGetChannelResends(INetChannel channel, out long sent, out long resent)
+        {
+            sent = resent = 0;
+            if (channel is not NetChannel { Connection: { } connection })
+                return false;
+
+            var stats = connection.Statistics;
+            sent = stats.SentMessages;
+            resent = stats.ResentMessages;
+            return true;
         }
 
         /// <inheritdoc />

@@ -228,6 +228,8 @@ internal sealed partial class PvsSystem : EntitySystem
         // Ensure each session has a PvsSession entry before starting any parallel jobs.
         CacheSessionData(players);
 
+        _trafficStats.BeginTick(); // Wolfgate: net stats
+
         // Get visible chunks, and update any dirty chunks.
         BeforeSerializeStates();
 

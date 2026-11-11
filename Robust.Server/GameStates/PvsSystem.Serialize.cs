@@ -71,6 +71,8 @@ internal sealed partial class PvsSystem
             _serializer.SerializeDirect(data.StateStream, state);
         }
 
+        RecordTrafficStats(state, data.StateStream); // Wolfgate: net stats
+
         ClearSessionState(data);
     }
 }

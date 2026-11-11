@@ -80,6 +80,7 @@ public sealed partial class NetManager
         var seqChannel = message.SequenceChannel;
 
         LogSend(message, method, packet);
+        _trafficStats?.RecordSend(message, packet.LengthBytes); // Wolfgate: net stats
 
         var item = new EncryptChannelItem
         {
