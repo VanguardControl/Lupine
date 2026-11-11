@@ -71,8 +71,8 @@ internal sealed partial class PvsSystem
             }
 
             var data = GetOrNewPvsSession(session);
-            // A client waiting on a full state is never kept waiting.
-            if (data.RequestedFull)
+            // A client waiting on a full state is never kept waiting, nor is one that has never acked.
+            if (data.RequestedFull || data.LastReceivedAck == GameTick.Zero)
             {
                 _sendNow.Add(session);
                 continue;
@@ -116,6 +116,11 @@ internal sealed partial class PvsSystem
                 var expected = session.Channel.Ping / tickMs + link.Interval + 2;
                 lossy |= trail - expected > _adaptiveAckTicks;
             }
+
+            // A client that has never acked a state is never slowed: while skipped it would hold every deletion
+            // since the round began.
+            if (data.RequestedFull || data.LastReceivedAck == GameTick.Zero)
+                lossy = false;
 
             if (lossy)
             {
