@@ -45,6 +45,7 @@ namespace Robust.Shared
             deps.Register<IParallelManagerInternal, ParallelManager>();
             deps.Register<ToolshedManager>();
             deps.Register<HttpClientHolder>();
+            deps.Register<NetTrafficStats>(); // Wolfgate: net stats
             deps.Register<RobustMemoryManager>();
             deps.Register<EntityConsoleHost>();
         }

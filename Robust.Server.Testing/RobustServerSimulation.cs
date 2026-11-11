@@ -217,6 +217,7 @@ namespace Robust.UnitTesting.Server
             container.Register<ProfManager, ProfManager>();
             container.RegisterInstance<ITaskManager>(new Mock<ITaskManager>().Object);
             container.Register<HttpClientHolder>();
+            container.Register<NetTrafficStats>(); // Wolfgate: net stats
             container.Register<IHttpClientHolder, HttpClientHolder>();
             container.Register<IHWId, DummyHWId>();
             container.Register<IServerNetManager, NetManager>();
