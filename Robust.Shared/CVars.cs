@@ -310,9 +310,10 @@ namespace Robust.Shared
         /// <summary>
         /// Wolfgate: the most ticks between game states sent to a client whose link is losing packets. A lossy link
         /// gets a state every 2nd tick, and so on up to this; 1 sends every tick to everyone.
+        /// Off (1) by default: on the test server, stock clients on a slowed link froze in the broadphase.
         /// </summary>
         public static readonly CVarDef<int> NetAdaptiveStateMaxInterval =
-            CVarDef.Create("net.adaptive_state_max_interval", 2, CVar.ARCHIVE | CVar.SERVERONLY);
+            CVarDef.Create("net.adaptive_state_max_interval", 1, CVar.ARCHIVE | CVar.SERVERONLY);
 
         /// <summary>Wolfgate: the share of reliable messages resent over a second that marks a link as lossy.</summary>
         public static readonly CVarDef<float> NetAdaptiveStateResendRatio =

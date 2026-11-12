@@ -31,7 +31,12 @@ public sealed class PvsAdaptiveRateTest : RobustIntegrationTest
         var pvs = sEntMan.System<PvsSystem>();
         var xforms = sEntMan.System<SharedTransformSystem>();
 
-        await server.WaitPost(() => server.ResolveDependency<IConfigurationManager>().SetCVar(CVars.NetPVS, true));
+        await server.WaitPost(() =>
+        {
+            var cfg = server.ResolveDependency<IConfigurationManager>();
+            cfg.SetCVar(CVars.NetPVS, true);
+            cfg.SetCVar(CVars.NetAdaptiveStateMaxInterval, 2);
+        });
         await RunTicksSync(server, client, 10);
 
         EntityUid mover = default;
