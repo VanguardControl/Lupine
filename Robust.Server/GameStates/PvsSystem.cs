@@ -144,7 +144,6 @@ internal sealed partial class PvsSystem : EntitySystem
     public override void Initialize()
     {
         base.Initialize();
-        InitAdaptive(); // Wolfgate: adaptive state rate
 
         if (Marshal.SizeOf<PvsMetadata>() != Marshal.SizeOf<PvsData>())
             throw new Exception($"Pvs struct sizes must match");
@@ -226,8 +225,6 @@ internal sealed partial class PvsSystem : EntitySystem
         // Wait for pending jobs and process disconnected players
         ProcessDisconnections();
 
-        players = FilterAdaptive(players); // Wolfgate: lossy links get states less often
-
         // Ensure each session has a PvsSession entry before starting any parallel jobs.
         CacheSessionData(players);
 
@@ -238,7 +235,6 @@ internal sealed partial class PvsSystem : EntitySystem
 
         // Construct & serialize the game state for each player (and update the replay).
         SerializeStates();
-        HoldSkippedAcks(); // Wolfgate: adaptive state rate
 
         foreach (var uid in _toDelete)
         {
