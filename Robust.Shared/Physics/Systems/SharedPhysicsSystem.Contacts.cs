@@ -34,6 +34,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 using JetBrains.Annotations;
 using Microsoft.Extensions.ObjectPool;
+using Prometheus;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
@@ -87,14 +88,71 @@ public abstract partial class SharedPhysicsSystem
        }
    };
 
-    private int ContactCount => _activeContacts.Count;
+    /// <summary>
+    /// Lupine: every contact in the world, awake or parked.
+    /// </summary>
+    internal int ContactCount => _contactCount;
 
     private const int ContactPoolInitialSize = 128;
     private const int ContactsPerThread = 32;
 
     private ObjectPool<Contact> _contactPool = default!;
 
+    /*
+     * Lupine: awake contact set, after Box2D v3. Upstream walked every contact each step, though most are between
+     * bodies that are both asleep (or asleep against static) and were skipped one by one.
+     *
+     * Invariant: a contact leaves the scan (ContactSet.Asleep, in no list) only when the scan itself finds both bodies
+     * inactive after every check that comes before that test. Everything that can change the outcome of those checks
+     * puts it back before the next scan: either body waking (SetAwake), CanCollide turning off (SetCanCollide), a map
+     * change (RecursiveMapUpdate) or a refilter (FlagFilter). So a parked contact is exactly one the upstream scan
+     * would have skipped. _activeContacts stays in creation order (Seq) and woken contacts are merged back in by Seq,
+     * so the scan visits contacts in the order upstream did.
+     */
+
+    /// <summary>
+    /// Awake contacts, in creation order: the contacts <see cref="CollideContacts"/> walks.
+    /// </summary>
     private readonly LinkedList<Contact> _activeContacts = new();
+
+    /// <summary>
+    /// Lupine: woken contacts waiting to be merged back into <see cref="_activeContacts"/>, by Seq. Entries for
+    /// contacts destroyed meanwhile are dropped when dequeued.
+    /// </summary>
+    private readonly PriorityQueue<Contact, long> _wakingContacts = new();
+
+    /// <summary>
+    /// Lupine: contacts woken during a scan behind its cursor. Upstream would not have reached them this step either;
+    /// they are queued once the scan ends.
+    /// </summary>
+    private readonly List<Contact> _wokenBehindScan = new();
+
+    private int _contactCount;
+    private long _nextContactSeq;
+    private bool _scanningContacts;
+    private long _scanSeq;
+    private LinkedListNode<Contact>? _scanNext;
+
+    /// <summary>See <see cref="CVars.PhysicsAwakeContacts"/>.</summary>
+    private bool _parkSleepingContacts;
+
+    /// <summary>
+    /// Lupine: contacts the last <see cref="CollideContacts"/> visited.
+    /// </summary>
+    internal int LastScannedContactCount { get; private set; }
+
+    /// <summary>
+    /// Lupine: contacts in the awake list.
+    /// </summary>
+    internal int AwakeContactCount => _activeContacts.Count;
+
+    private static readonly Gauge ContactCountGauge = Metrics.CreateGauge(
+        "physics_contact_count",
+        "Contacts in the physics world, awake or asleep.");
+
+    private static readonly Gauge AwakeContactCountGauge = Metrics.CreateGauge(
+        "physics_awake_contact_count",
+        "Contacts the last physics step scanned: those with at least one awake body.");
 
     private sealed class ContactPoolPolicy : IPooledObjectPolicy<Contact>
     {
@@ -186,6 +244,7 @@ public abstract partial class SharedPhysicsSystem
 
         InitializePool();
         EntityManager.EntityQueueDeleted += OnContactEntityQueueDel;
+        Subs.CVar(_cfg, CVars.PhysicsAwakeContacts, SetParkSleepingContacts, true);
     }
 
     private void ShutdownContacts()
@@ -285,7 +344,15 @@ public abstract partial class SharedPhysicsSystem
         var bodB = contact.BodyB!;
 
         // Insert into world
+        // Lupine: a new contact is awake until the scan has seen it once.
+        contact.Seq = _nextContactSeq++;
+        contact.Set = ContactSet.Awake;
+        _contactCount++;
         _activeContacts.AddLast(contact.MapNode);
+
+        // A contact made during the scan is visited by it, as upstream did unless the scan was on its last contact.
+        if (_scanningContacts && _scanNext == null)
+            _scanNext = contact.MapNode;
 
         // Connect to body A
         DebugTools.Assert(!fixA.Contacts.ContainsKey(fixB),
@@ -376,7 +443,12 @@ public abstract partial class SharedPhysicsSystem
         next = node?.Next;
 
         // Remove from the world
-        _activeContacts.Remove(contact.MapNode);
+        // Lupine: a waking contact's queue entry is dropped when dequeued; a parked one is in no list.
+        if (contact.Set == ContactSet.Awake)
+            RemoveActiveContact(contact);
+
+        contact.Set = ContactSet.None;
+        _contactCount--;
 
         // Remove from body 1
         DebugTools.Assert(fixtureA.Contacts.ContainsKey(fixtureB));
@@ -404,12 +476,13 @@ public abstract partial class SharedPhysicsSystem
         // Can be changed while enumerating
         // TODO: check for null instead?
         // Work out which contacts are still valid before we decide to update manifolds.
-        var node = _activeContacts.First;
+        // Lupine: walks the awake list with woken contacts merged in; see BeginContactScan.
+        BeginContactScan();
+        var scanned = 0;
 
-        while (node != null)
+        while (NextScanContact() is { } contact)
         {
-            var contact = node.Value;
-            node = node.Next;
+            scanned++;
 
             // It's possible the contact was destroyed by content in which case we just skip it.
             if (!contact.Enabled)
@@ -465,6 +538,10 @@ public abstract partial class SharedPhysicsSystem
             // At least one body must be awake and it must be dynamic or kinematic.
             if (activeA == false && activeB == false)
             {
+                // Lupine: park it until something could change this outcome; see _activeContacts.
+                if (_parkSleepingContacts)
+                    ParkContact(contact);
+
                 continue;
             }
 
@@ -557,6 +634,8 @@ public abstract partial class SharedPhysicsSystem
             contacts[index++] = contact;
         }
 
+        EndContactScan(scanned);
+
         var status = ArrayPool<ContactStatus>.Shared.Rent(index);
         var worldPoints = ArrayPool<FixedArray4<Vector2>>.Shared.Rent(index);
 
@@ -587,6 +666,157 @@ public abstract partial class SharedPhysicsSystem
         ArrayPool<ContactStatus>.Shared.Return(status);
         ArrayPool<FixedArray4<Vector2>>.Shared.Return(worldPoints);
     }
+
+    #region Lupine: awake contact set
+
+    private void BeginContactScan()
+    {
+        // A scan cut short by an exception leaves contacts behind its cursor; queue them now.
+        QueueWokenBehindScan();
+        _scanningContacts = true;
+        _scanSeq = long.MinValue;
+        _scanNext = _activeContacts.First;
+    }
+
+    private void EndContactScan(int scanned)
+    {
+        _scanningContacts = false;
+        _scanNext = null;
+        QueueWokenBehindScan();
+        LastScannedContactCount = scanned;
+
+        if (MetricsEnabled)
+        {
+            ContactCountGauge.Set(_contactCount);
+            AwakeContactCountGauge.Set(scanned);
+        }
+    }
+
+    private void QueueWokenBehindScan()
+    {
+        foreach (var contact in _wokenBehindScan)
+        {
+            if (contact.Set == ContactSet.Waking)
+                _wakingContacts.Enqueue(contact, contact.Seq);
+        }
+
+        _wokenBehindScan.Clear();
+    }
+
+    /// <summary>
+    /// The scan's next contact in creation order: the next awake one, or a woken one with a lower Seq, which is put
+    /// back into the awake list at its place.
+    /// </summary>
+    private Contact? NextScanContact()
+    {
+        while (_wakingContacts.TryPeek(out var woken, out var seq))
+        {
+            if (_scanNext != null && seq > _scanNext.Value.Seq)
+                break;
+
+            _wakingContacts.Dequeue();
+
+            // Destroyed, or already merged under a duplicate entry.
+            if (woken.Set != ContactSet.Waking || woken.Seq != seq)
+                continue;
+
+            woken.Set = ContactSet.Awake;
+
+            if (_scanNext == null)
+                _activeContacts.AddLast(woken.MapNode);
+            else
+                _activeContacts.AddBefore(_scanNext, woken.MapNode);
+
+            _scanSeq = seq;
+            return woken;
+        }
+
+        if (_scanNext == null)
+            return null;
+
+        var contact = _scanNext.Value;
+        _scanNext = _scanNext.Next;
+        _scanSeq = contact.Seq;
+        return contact;
+    }
+
+    /// <summary>
+    /// Removes an awake contact from the awake list, keeping a running scan's cursor valid.
+    /// </summary>
+    private void RemoveActiveContact(Contact contact)
+    {
+        DebugTools.Assert(contact.Set == ContactSet.Awake);
+
+        if (_scanNext == contact.MapNode)
+            _scanNext = contact.MapNode.Next;
+
+        _activeContacts.Remove(contact.MapNode);
+    }
+
+    /// <summary>
+    /// Takes a contact whose bodies are both inactive out of the scan until <see cref="WakeContact"/>.
+    /// </summary>
+    private void ParkContact(Contact contact)
+    {
+        RemoveActiveContact(contact);
+        contact.Set = ContactSet.Asleep;
+    }
+
+    /// <summary>
+    /// Puts a parked contact back into the scan. Run before anything that could change what the scan does with it.
+    /// </summary>
+    internal void WakeContact(Contact contact)
+    {
+        if (contact.Set != ContactSet.Asleep)
+            return;
+
+        contact.Set = ContactSet.Waking;
+
+        if (_scanningContacts && contact.Seq <= _scanSeq)
+            _wokenBehindScan.Add(contact);
+        else
+            _wakingContacts.Enqueue(contact, contact.Seq);
+    }
+
+    /// <summary>
+    /// Puts a body's parked contacts back into the scan.
+    /// </summary>
+    internal void WakeContacts(PhysicsComponent body)
+    {
+        var node = body.Contacts.First;
+
+        while (node != null)
+        {
+            WakeContact(node.Value);
+            node = node.Next;
+        }
+    }
+
+    /// <summary>
+    /// Flags a contact for filtering at the next scan.
+    /// </summary>
+    internal void FlagFilter(Contact contact)
+    {
+        contact.Flags |= ContactFlags.Filter;
+        WakeContact(contact);
+    }
+
+    private void SetParkSleepingContacts(bool value)
+    {
+        _parkSleepingContacts = value;
+
+        if (value)
+            return;
+
+        var query = AllEntityQuery<PhysicsComponent>();
+
+        while (query.MoveNext(out var body))
+        {
+            WakeContacts(body);
+        }
+    }
+
+    #endregion
 
     internal void RunContactEvents(ContactStatus status, Contact contact, FixedArray4<Vector2> worldPoint)
     {

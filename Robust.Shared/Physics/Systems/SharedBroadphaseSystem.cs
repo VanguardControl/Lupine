@@ -570,7 +570,8 @@ namespace Robust.Shared.Physics.Systems
         {
             foreach (var contact in fixture.Contacts.Values)
             {
-                contact.Flags |= ContactFlags.Filter;
+                // Lupine: also wakes a parked contact so the next scan filters it.
+                _physicsSystem.FlagFilter(contact);
             }
 
             if (!Resolve(uid, ref xform))

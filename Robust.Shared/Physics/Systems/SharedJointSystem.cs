@@ -641,7 +641,8 @@ public abstract partial class SharedJointSystem : EntitySystem
             {
                 // Flag the contact for filtering at the next time step (where either
                 // body is awake).
-                contact.Flags |= ContactFlags.Filter;
+                // Lupine: also wakes a parked contact so the next scan filters it.
+                _physics.FlagFilter(contact);
             }
         }
     }

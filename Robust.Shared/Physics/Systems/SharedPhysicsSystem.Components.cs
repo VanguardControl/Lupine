@@ -533,6 +533,10 @@ public partial class SharedPhysicsSystem
             AddAwakeBody((uid, body, Transform(uid)));
         else
             RemoveSleepBody((uid, body, Transform(uid)));
+
+        // Lupine: its parked contacts go back to the contact scan.
+        if (body.Awake)
+            WakeContacts(body);
     }
 
     public void TrySetBodyType(EntityUid uid, BodyType value, FixturesComponent? manager = null, PhysicsComponent? body = null, TransformComponent? xform = null)
@@ -648,6 +652,10 @@ public partial class SharedPhysicsSystem
 
         if (!value)
             SetAwake((uid, body), false);
+
+        // Lupine: the contact scan destroys contacts of a body that can't collide, so it must see parked ones.
+        if (!value)
+            WakeContacts(body);
 
         if (body.Initialized)
         {
