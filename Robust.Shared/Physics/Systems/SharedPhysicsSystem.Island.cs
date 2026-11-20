@@ -140,6 +140,12 @@ public abstract partial class SharedPhysicsSystem
     private readonly IslandListPool<(Joint Joint, float Error)> _islandBrokenJointPool = new();
 
     /// <summary>
+    /// Lupine: island lists made since startup, of every kind.
+    /// </summary>
+    internal int IslandListsCreated =>
+        _islandBodyPool.Created + _islandContactPool.Created + _islandJointPool.Created + _islandBrokenJointPool.Created;
+
+    /// <summary>
     /// Lupine: a free list for island lists, uncapped and last-in first-out. The object pools handed lists out first
     /// returned, first out, so the lone island (every contact-less awake body, returned last) got another island's
     /// small list and regrew it each step; past 256 islands they dropped lists, so later islands started empty.
@@ -148,9 +154,18 @@ public abstract partial class SharedPhysicsSystem
     {
         private readonly Stack<List<T>> _free = new();
 
+        /// <summary>
+        /// Lists made so far. Stops growing once a scene's islands each have theirs.
+        /// </summary>
+        public int Created { get; private set; }
+
         public List<T> Get()
         {
-            return _free.TryPop(out var list) ? list : new List<T>();
+            if (_free.TryPop(out var list))
+                return list;
+
+            Created++;
+            return new List<T>();
         }
 
         public void Return(List<T> list)
@@ -575,6 +590,14 @@ public abstract partial class SharedPhysicsSystem
                 }
 
                 body.IslandIndex[idx] = i;
+            }
+
+            // Lupine: a body that joined the lone island only borrowed these lists; the next seed takes them back.
+            if (idx == loneIsland.Index)
+            {
+                _islandBodyPool.Return(bodies);
+                _islandContactPool.Return(contacts);
+                _islandJointPool.Return(joints);
             }
         }
 
