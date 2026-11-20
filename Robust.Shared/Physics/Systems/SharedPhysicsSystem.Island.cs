@@ -127,17 +127,53 @@ public abstract partial class SharedPhysicsSystem
      */
     private const int MaxIslands = 256;
 
-    private readonly ObjectPool<List<Entity<PhysicsComponent, TransformComponent>>> _islandBodyPool =
-        new DefaultObjectPool<List<Entity<PhysicsComponent, TransformComponent>>>(new ListPolicy<Entity<PhysicsComponent, TransformComponent>>(), MaxIslands);
+    // Lupine: island lists keep their capacity across steps (see IslandListPool).
+    private readonly IslandListPool<Entity<PhysicsComponent, TransformComponent>> _islandBodyPool = new();
 
-    private readonly ObjectPool<List<Contact>> _islandContactPool =
-        new DefaultObjectPool<List<Contact>>(new ListPolicy<Contact>(), MaxIslands);
+    private readonly IslandListPool<Contact> _islandContactPool = new();
 
     /// <summary>
     /// Due to joint relays we need to track the dummy joint and the original joint.
     /// </summary>
-    private readonly ObjectPool<List<(Joint Original, Joint Joint)>> _islandJointPool =
-        new DefaultObjectPool<List<(Joint Original, Joint Joint)>>(new ListPolicy<(Joint Original, Joint Joint)>(), MaxIslands);
+    private readonly IslandListPool<(Joint Original, Joint Joint)> _islandJointPool = new();
+
+    private readonly IslandListPool<(Joint Joint, float Error)> _islandBrokenJointPool = new();
+
+    /// <summary>
+    /// Lupine: island lists made since startup, of every kind.
+    /// </summary>
+    internal int IslandListsCreated =>
+        _islandBodyPool.Created + _islandContactPool.Created + _islandJointPool.Created + _islandBrokenJointPool.Created;
+
+    /// <summary>
+    /// Lupine: a free list for island lists, uncapped and last-in first-out. The object pools handed lists out first
+    /// returned, first out, so the lone island (every contact-less awake body, returned last) got another island's
+    /// small list and regrew it each step; past 256 islands they dropped lists, so later islands started empty.
+    /// </summary>
+    private sealed class IslandListPool<T>
+    {
+        private readonly Stack<List<T>> _free = new();
+
+        /// <summary>
+        /// Lists made so far. Stops growing once a scene's islands each have theirs.
+        /// </summary>
+        public int Created { get; private set; }
+
+        public List<T> Get()
+        {
+            if (_free.TryPop(out var list))
+                return list;
+
+            Created++;
+            return new List<T>();
+        }
+
+        public void Return(List<T> list)
+        {
+            list.Clear();
+            _free.Push(list);
+        }
+    }
 
     internal record struct IslandData(
         int Index,
@@ -342,8 +378,7 @@ public abstract partial class SharedPhysicsSystem
             _islandBodyPool.Get(),
             _islandContactPool.Get(),
             _islandJointPool.Get(),
-            // TODO: pool these lists??
-            new List<(Joint Joint, float Error)>());
+            _islandBrokenJointPool.Get());
 
         // Build the relevant islands / graphs for all bodies.
         foreach (var ent in _awakeBodyList)
@@ -537,8 +572,7 @@ public abstract partial class SharedPhysicsSystem
             }
             else
             {
-                // TODO: pool the joint/error lists?
-                var data = new IslandData(islandIndex++, false, bodies, contacts, joints, new List<(Joint Joint, float Error)>())
+                var data = new IslandData(islandIndex++, false, bodies, contacts, joints, _islandBrokenJointPool.Get())
                 {
                     MapUid = mapUid.Value
                 };
@@ -558,6 +592,14 @@ public abstract partial class SharedPhysicsSystem
                 }
 
                 body.IslandIndex[idx] = i;
+            }
+
+            // Lupine: a body that joined the lone island only borrowed these lists; the next seed takes them back.
+            if (idx == loneIsland.Index)
+            {
+                _islandBodyPool.Return(bodies);
+                _islandContactPool.Return(contacts);
+                _islandJointPool.Return(joints);
             }
         }
 
@@ -596,7 +638,7 @@ public abstract partial class SharedPhysicsSystem
         }
 
         _islandJointPool.Return(island.Joints);
-        island.BrokenJoints.Clear();
+        _islandBrokenJointPool.Return(island.BrokenJoints);
     }
 
     protected virtual void Cleanup(float frameTime)

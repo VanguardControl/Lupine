@@ -207,6 +207,10 @@ namespace Robust.Shared.Physics.Systems
             DebugTools.Assert(!Deleted(uid));
             _joints.ClearJoints(uid);
 
+            // Lupine: the contact scan destroys contacts in nullspace, so it must see parked ones.
+            if (body != null)
+                WakeContacts(body);
+
             foreach (var child in xform._children)
             {
                 if (XformQuery.TryGetComponent(child, out var childXform))

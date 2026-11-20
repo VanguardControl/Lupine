@@ -1536,6 +1536,13 @@ namespace Robust.Shared
             CVarDef.Create("physics.traversal_tile_fast_path", false, CVar.ARCHIVE);
 
         /// <summary>
+        /// Whether the contact scan sets aside contacts whose bodies are both asleep (or asleep against static) until
+        /// one wakes, instead of visiting them every step. Same results either way; off is the upstream scan.
+        /// </summary>
+        public static readonly CVarDef<bool> PhysicsAwakeContacts =
+            CVarDef.Create("physics.awake_contacts", true, CVar.ARCHIVE);
+
+        /// <summary>
         /// Whether pausing an entity puts its awake body to sleep until it is unpaused, so paused bodies cost
         /// nothing in the solver loops.
         /// </summary>

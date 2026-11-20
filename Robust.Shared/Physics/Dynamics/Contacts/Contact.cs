@@ -89,6 +89,16 @@ namespace Robust.Shared.Physics.Dynamics.Contacts
 
         internal ContactFlags Flags = ContactFlags.None;
 
+        /// <summary>
+        /// Lupine: creation order. The contact scan visits awake contacts in this order.
+        /// </summary>
+        internal long Seq;
+
+        /// <summary>
+        /// Lupine: which of the physics system's contact sets holds this contact.
+        /// </summary>
+        internal ContactSet Set;
+
         internal Contact(IManifoldManager manifoldManager)
         {
             _manifoldManager = manifoldManager;
@@ -503,5 +513,23 @@ namespace Robust.Shared.Physics.Dynamics.Contacts
         /// Set after a contact has been deleted and returned to the contact pool.
         /// </summary>
         Deleted = 1 << 5,
+    }
+
+    /// <summary>
+    /// Lupine: the contact set a contact is in. See <see cref="SharedPhysicsSystem.CollideContacts"/>.
+    /// </summary>
+    internal enum ContactSet : byte
+    {
+        /// <summary>Not in the world (pooled, or being created).</summary>
+        None = 0,
+
+        /// <summary>In the awake list the contact scan walks.</summary>
+        Awake,
+
+        /// <summary>Parked: both bodies were inactive when last scanned. In no list.</summary>
+        Asleep,
+
+        /// <summary>Woken from parked; queued to be merged back into the awake list by the next scan.</summary>
+        Waking,
     }
 }
