@@ -872,6 +872,22 @@ public abstract partial class SharedPhysicsSystem
         }
     }
 
+    /// <summary>
+    /// Wolfgate: whether manifolds of far-away contacts are built around body A (physics.precise_contacts).
+    /// </summary>
+    private bool _preciseContacts;
+
+    /// <summary>
+    /// Past this distance on either axis a float is coarser than a millimetre, a fifth of the solver's slop. Nearer
+    /// contacts take the stock path and give the stock result.
+    /// </summary>
+    private const float FarFromOrigin = 16384f;
+
+    private static bool IsFarFromOrigin(Vector2 position)
+    {
+        return MathF.Abs(position.X) >= FarFromOrigin || MathF.Abs(position.Y) >= FarFromOrigin;
+    }
+
     private void BuildManifolds(Contact[] contacts, int count, ContactStatus[] status, FixedArray4<Vector2>[] worldPoints)
     {
         if (count == 0)
@@ -945,6 +961,24 @@ public abstract partial class SharedPhysicsSystem
         var bodyATransform = GetPhysicsTransform(uidA);
         var bodyBTransform = GetPhysicsTransform(uidB);
 
+        // Wolfgate: a manifold only holds points local to each body, so it is the same wherever the pair sits. Far
+        // from the map origin the float world positions are millimetres off (8 mm at 76 km), which went straight
+        // into those points and shook every contact on a moving ship. Out there, place body A at zero and body B
+        // by the difference taken in doubles.
+        var origin = Vector2.Zero;
+
+        if (_preciseContacts &&
+            IsFarFromOrigin(bodyATransform.Position) &&
+            XformQuery.TryGetComponent(uidA, out var xformA) &&
+            XformQuery.TryGetComponent(uidB, out var xformB))
+        {
+            var (posA, _) = _transform.GetWorldPositionRotationPrecise(uidA, xformA);
+            var (posB, _) = _transform.GetWorldPositionRotationPrecise(uidB, xformB);
+            origin = bodyATransform.Position;
+            bodyATransform.Position = Vector2.Zero;
+            bodyBTransform.Position = new Vector2((float) (posB.X - posA.X), (float) (posB.Y - posA.Y));
+        }
+
         var contactStatus = contact.Update(bodyATransform, bodyBTransform, out wake[index]);
         status[index] = contactStatus;
 
@@ -952,6 +986,17 @@ public abstract partial class SharedPhysicsSystem
         {
             var points = new FixedArray4<Vector2>();
             contact.GetWorldManifold(bodyATransform, bodyBTransform, out var worldNormal, points.AsSpan);
+
+            if (origin != Vector2.Zero)
+            {
+                var span = points.AsSpan;
+
+                for (var i = 0; i < contact.Manifold.PointCount; i++)
+                {
+                    span[i] += origin;
+                }
+            }
+
             // Use the 3rd Vector2 as the world normal, 4th is blank.
             points._02 = worldNormal;
             worldPoints[index] = points;

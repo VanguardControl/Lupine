@@ -709,6 +709,10 @@ public abstract partial class SharedPhysicsSystem
         // Actual solver here; cache the data for later.
         var solvedPositions = ArrayPool<Vector2>.Shared.Rent(totalBodies);
         var solvedAngles = ArrayPool<float>.Shared.Rent(totalBodies);
+        // Wolfgate: what each root's new position is before it is rounded to a float; see SetPreciseRootPosition.
+        // Prediction replays from server state every tick, so there is nothing to carry over there.
+        _recordPreciseRoots = _preciseRootPositions && !prediction;
+        _solvedPrecise = _recordPreciseRoots ? ArrayPool<Vector2d>.Shared.Rent(totalBodies) : Array.Empty<Vector2d>();
         var linearVelocities = ArrayPool<Vector2>.Shared.Rent(totalBodies);
         var angularVelocities = ArrayPool<float>.Shared.Rent(totalBodies);
         var sleepStatus = ArrayPool<bool>.Shared.Rent(totalBodies);
@@ -753,6 +757,9 @@ public abstract partial class SharedPhysicsSystem
         // Cleanup
         ArrayPool<Vector2>.Shared.Return(solvedPositions);
         ArrayPool<float>.Shared.Return(solvedAngles);
+        if (_recordPreciseRoots)
+            ArrayPool<Vector2d>.Shared.Return(_solvedPrecise);
+        _solvedPrecise = Array.Empty<Vector2d>();
         ArrayPool<Vector2>.Shared.Return(linearVelocities);
         ArrayPool<float>.Shared.Return(angularVelocities);
         ArrayPool<bool>.Shared.Return(sleepStatus);
@@ -799,6 +806,17 @@ public abstract partial class SharedPhysicsSystem
 
     private readonly List<IslandData> _islandPartition = new();
 
+    /// <summary>
+    /// Wolfgate: whether roots keep a double-precision position between steps (physics.precise_root_positions).
+    /// </summary>
+    private bool _preciseRootPositions;
+
+    /// <summary>
+    /// Whether the step being solved records root positions, and the positions it solved, by island offset.
+    /// </summary>
+    private bool _recordPreciseRoots;
+    private Vector2d[] _solvedPrecise = Array.Empty<Vector2d>();
+
     private static bool InternalParallel(IslandData island)
     {
         // Should lone island most times as well.
@@ -836,7 +854,7 @@ public abstract partial class SharedPhysicsSystem
             // the sub-centimetre position that float world coordinates can't hold. Contacts and joints only use
             // differences of positions, so a shared origin per island changes nothing else. Lone bodies share no
             // constraints and each get their own origin.
-            var (worldPosD, worldRotD) = _transform.GetWorldPositionRotationPrecise(xform);
+            var (worldPosD, worldRotD) = _transform.GetWorldPositionRotationPrecise(bodyEnt.Owner, xform);
             origins[i] = i == 0 || island.LoneIsland ? worldPosD : origins[0];
             var worldPos = new Vector2((float) (worldPosD.X - origins[i].X), (float) (worldPosD.Y - origins[i].Y));
 
@@ -1124,10 +1142,15 @@ public abstract partial class SharedPhysicsSystem
 
     private void FinalisePositions(int start, int end, int offset, List<Entity<PhysicsComponent, TransformComponent>> bodies, Vector2[] positions, Vector2d[] origins, float[] angles, Vector2[] solvedPositions, float[] solvedAngles)
     {
+        var record = _recordPreciseRoots;
+
         for (var i = start; i < end; i++)
         {
             var ent = bodies[i];
             var body = ent.Comp1;
+
+            if (record)
+                _solvedPrecise[offset + i] = new Vector2d(double.NaN, double.NaN);
 
             if (body.BodyType == BodyType.Static)
                 continue;
@@ -1138,7 +1161,7 @@ public abstract partial class SharedPhysicsSystem
             if (!TryComp(xform.ParentUid, out TransformComponent? transform))
                 continue;
 
-            var (parentPos, parentRot) = _transform.GetWorldPositionRotationPrecise(transform);
+            var (parentPos, parentRot) = _transform.GetWorldPositionRotationPrecise(xform.ParentUid, transform);
             var worldRot = (float) (parentRot + xform._localRotation.Theta);
 
             var angle = angles[i];
@@ -1147,9 +1170,13 @@ public abstract partial class SharedPhysicsSystem
             var adjustedPosition = positions[i] - Physics.Transform.Mul(q, body.LocalCenter);
 
             // Back to local coordinates in doubles; see the origin note in SolveIsland.
-            var solvedPosition = SharedTransformSystem.WorldToLocalPrecise(origins[i], adjustedPosition, parentPos, parentRot);
+            var solvedPrecise = SharedTransformSystem.WorldToLocalPrecise(origins[i], adjustedPosition, parentPos, parentRot);
+            var solvedPosition = new Vector2((float) solvedPrecise.X, (float) solvedPrecise.Y);
             solvedPositions[offset + i] = solvedPosition - xform.LocalPosition;
             solvedAngles[offset + i] = angle - worldRot;
+
+            if (record && xform.ParentUid == xform.MapUid)
+                _solvedPrecise[offset + i] = solvedPrecise;
         }
     }
 
@@ -1212,6 +1239,15 @@ public abstract partial class SharedPhysicsSystem
                     xform.LocalPosition + position,
                     xform.LocalRotation + angle,
                     xform);
+
+                // Wolfgate: a root keeps the part of its new position that the float just dropped.
+                if (_recordPreciseRoots && xform.Running)
+                {
+                    var precise = _solvedPrecise[offset + i];
+
+                    if (!double.IsNaN(precise.X))
+                        _transform.SetPreciseRootPosition(uid, xform, precise);
+                }
             }
 
             if (physicsDirtied)

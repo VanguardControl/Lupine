@@ -1550,6 +1550,24 @@ namespace Robust.Shared
             CVarDef.Create("physics.sleep_paused_bodies", true, CVar.ARCHIVE);
 
         /// <summary>
+        /// Whether a body parented directly to a map (a grid, or anything loose in space) keeps the position the
+        /// solver reached in doubles between steps. A float is only good to 8 mm 76 km from the map origin, so
+        /// without this a far grid loses part of every step: slow drift stalls, turns shake and docked grids are
+        /// rounded apart. The networked position is still the float.
+        /// </summary>
+        public static readonly CVarDef<bool> PhysicsPreciseRootPositions =
+            CVarDef.Create("physics.precise_root_positions", true, CVar.ARCHIVE);
+
+        /// <summary>
+        /// Whether contact manifolds more than 16 km from the map origin are built around the first body, with the
+        /// second placed by a difference taken in doubles, instead of from float world positions. Without this the
+        /// rounding of those positions lands in the contact points, and everything touching something on a moving
+        /// far ship is nudged every tick. Contacts nearer the origin are unchanged.
+        /// </summary>
+        public static readonly CVarDef<bool> PhysicsPreciseContacts =
+            CVarDef.Create("physics.precise_contacts", true, CVar.ARCHIVE);
+
+        /// <summary>
         /// Whether removing an anchored entity from a tile swaps the last entry into its place instead of shifting the
         /// list. Changes the order anchored entities are enumerated in on that tile.
         /// </summary>

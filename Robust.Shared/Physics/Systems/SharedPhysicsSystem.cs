@@ -117,13 +117,24 @@ namespace Robust.Shared.Physics.Systems
             InitializeContacts();
 
             Subs.CVar(_cfg, CVars.PhysicsSleepPausedBodies, value => _sleepPausedBodies = value, true);
+            Subs.CVar(_cfg, CVars.PhysicsPreciseRootPositions, OnPreciseRootPositionsChange, true);
+            Subs.CVar(_cfg, CVars.PhysicsPreciseContacts, value => _preciseContacts = value, true);
             Subs.CVar(_cfg, CVars.AutoClearForces, OnAutoClearChange, true);
             Subs.CVar(_cfg, CVars.NetTickrate, UpdateSubsteps, true);
             Subs.CVar(_cfg, CVars.TargetMinimumTickrate, UpdateSubsteps, true);
         }
 
+        private void OnPreciseRootPositionsChange(bool value)
+        {
+            _preciseRootPositions = value;
+
+            if (!value)
+                _transform.ClearPreciseRootPositions();
+        }
+
         private void OnPhysicsShutdown(EntityUid uid, PhysicsComponent component, ComponentShutdown args)
         {
+            _transform.ClearPreciseRootPosition(uid);
             SetCanCollide(uid, false, false, body: component);
             DebugTools.Assert(!component.Awake);
 
