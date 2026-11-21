@@ -257,6 +257,11 @@ namespace Robust.Shared.Physics.Systems
 
             foreach (var (proxyA, proxyB, flags) in _contactJob.Pairs)
             {
+                // Wolfgate: the parallel search can collect the same pair twice in one step; the first one made the
+                // contact, so the second would trip AddPair's already-in-contact assert.
+                if (proxyA.Fixture.Contacts.ContainsKey(proxyB.Fixture))
+                    continue;
+
                 var otherBody = proxyB.Body;
                 var contactFlags = ContactFlags.None;
 
