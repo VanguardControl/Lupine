@@ -521,6 +521,13 @@ public sealed partial class EntityDeserializer :
     // Wolfgate: split out of AllocateEntities so a staged load can allocate one entity at a time.
     private EntityUid AllocateEntity(EntityPrototype? proto, EntData ent)
     {
+        // Wolfgate: the file's grid is an entity that already exists; see AdoptGrid.
+        if (IsAdopted(ent.YamlId))
+        {
+            UidMap.Add(ent.YamlId, AdoptGrid!.Value);
+            return EntityUid.Invalid;
+        }
+
         var entity = EntMan.AllocEntity(proto);
         Result.Entities.Add(entity);
         UidMap.Add(ent.YamlId, entity);
@@ -748,6 +755,8 @@ public sealed partial class EntityDeserializer :
         {
             if (!UidMap.TryGetValue(yamlId, out var uid))
                 _log.Error($"Missing orphan entity with YamlId: {yamlId}");
+            else if (uid == AdoptGrid)
+                continue; // Wolfgate: an adopted grid already has its place.
             else if (_mapQuery.HasComponent(uid) || _xformQuery.Comp(uid).ParentUid.IsValid())
                 _log.Error($"Entity {EntMan.ToPrettyString(uid)} was incorrectly labelled as an orphan? YamlId: {yamlId}");
             else
@@ -823,6 +832,9 @@ public sealed partial class EntityDeserializer :
 
         foreach (var entity in Result.Grids)
         {
+            if (entity.Owner == AdoptGrid) // Wolfgate: its tiles are the live ones, not the file's
+                continue;
+
             EntMan.EnsureComponent<MapSaveTileMapComponent>(entity).TileMap = TileMap.ShallowClone();
         }
     }
@@ -861,6 +873,8 @@ public sealed partial class EntityDeserializer :
 
             case FileCategory.Grid:
                 if (Result.Maps.Count == 0 && Result.Grids.Count == 1 && Result.Orphans.Count == 1 && Result.Orphans.First() == Result.Grids.First().Owner)
+                    return;
+                if (AdoptGrid != null && Result.Maps.Count == 0 && Result.Grids.Count == 1 && Result.Orphans.Count == 0) // Wolfgate
                     return;
                 _log.Error($"Expected file to contain a single grid, but instead found {Result.Grids.Count} grids and {Result.Orphans.Count} orphans");
                 break;
@@ -1212,6 +1226,9 @@ public sealed partial class EntityDeserializer :
 
         if (int.TryParse(node.Value, out var val) && UidMap.TryGetValue(val, out var entity))
             return entity;
+
+        if (TryReadExternal(node.Value, out var external))
+            return external;
 
         msg = CurrentReadingEntity is not { } ent
             ? "Encountered unknown entity yaml uid"

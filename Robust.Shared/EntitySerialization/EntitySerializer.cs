@@ -1048,6 +1048,10 @@ public sealed partial class EntitySerializer : ISerializationContext,
                     : $"Encountered a reference to a missing entity: {value} while serializing {EntMan.ToPrettyString(CurrentEntity)}.");
                 return InvalidNode;
             case MissingEntityBehaviour.Ignore:
+                // Wolfgate: see SerializationOptions.KeepExternalReferences.
+                if (Options.KeepExternalReferences && !EntMan.Deleted(value))
+                    return new ValueDataNode(EntityDeserializer.ExternalPrefix + value.Id.ToString(CultureInfo.InvariantCulture));
+
                 return InvalidNode;
             case MissingEntityBehaviour.IncludeNullspace:
                 if (!EntMan.TryGetComponent(value, out TransformComponent? xform)

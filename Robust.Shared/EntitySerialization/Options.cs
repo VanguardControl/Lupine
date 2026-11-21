@@ -31,6 +31,14 @@ public record struct SerializationOptions
     public bool ErrorOnOrphan = true;
 
     /// <summary>
+    /// Wolfgate: with <see cref="MissingEntityBehaviour.Ignore"/>, write a reference to a live entity that is not
+    /// being saved as that entity itself instead of "invalid". A load by the same server process gets the entity
+    /// back if it still exists; any other load reads it as invalid. For saves that are read back within a round,
+    /// where what the saved entities point at outside themselves is still there.
+    /// </summary>
+    public bool KeepExternalReferences = false;
+
+    /// <summary>
     /// Log level to use when auto-including entities while serializing. Null implies no logs.
     /// See <see cref="MissingEntityBehaviour"/>.
     /// </summary>

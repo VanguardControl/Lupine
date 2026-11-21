@@ -251,4 +251,126 @@ internal sealed class StagedGridLoadTest : RobustIntegrationTest
                 .ToList();
         }
     }
+    /// <summary>
+    /// A grid whose contents were saved and deleted gets them back on the same grid entity, a few a tick.
+    /// </summary>
+    [Test]
+    public async Task ContentsLoadOntoTheGridThatStayed()
+    {
+        await using var pair = await StartConnectedPair(
+            new ServerIntegrationOptions { Pool = false, ExtraPrototypes = Prototypes },
+            new ClientIntegrationOptions { Pool = false, ExtraPrototypes = Prototypes });
+        var (client, server) = pair;
+
+        var sEntMan = server.ResolveDependency<IEntityManager>();
+        var cEntMan = client.ResolveDependency<IEntityManager>();
+        var sPlayerMan = server.ResolveDependency<ISharedPlayerManager>();
+        var mapSys = server.System<SharedMapSystem>();
+        var metaSys = server.System<MetaDataSystem>();
+        var loader = server.System<MapLoaderSystem>();
+
+        SerializationTestHelper.LoadTileDefs(server.ProtoMan, server.ResolveDependency<ITileDefinitionManager>(), "space");
+        SerializationTestHelper.LoadTileDefs(client.ProtoMan, client.ResolveDependency<ITileDefinitionManager>(), "space");
+        var tile = new Tile(server.ProtoMan.Index<TileDef>("a").TileId);
+        server.Post(() => server.ResolveDependency<IConfigurationManager>().SetCVar(CVars.NetPVS, false));
+        await RunTicksSync(server, client, 10);
+
+        EntityUid map = default;
+        EntityUid grid = default;
+        string yaml = default!;
+        var expected = new List<(string Name, int Value)>();
+        await server.WaitPost(() =>
+        {
+            map = mapSys.CreateMap();
+            var made = mapSys.CreateGridEntity(map);
+            grid = made.Owner;
+            mapSys.SetTile(grid, made.Comp, Vector2i.Zero, tile);
+            sEntMan.System<SharedTransformSystem>().SetWorldPosition(grid, new Vector2(30, 30));
+
+            for (var i = 0; i < Children; i++)
+            {
+                var child = sEntMan.SpawnEntity(null, new EntityCoordinates(grid, new Vector2(0.5f, 0.5f)));
+                metaSys.SetEntityName(child, $"child {i}");
+                sEntMan.AddComponent<AutoNetworkingTestComponent>(child).IsNetworked = 100 + i;
+                expected.Add(($"child {i}", 100 + i));
+            }
+
+            var player = sEntMan.SpawnEntity(null, new EntityCoordinates(map, new Vector2(50, 50)));
+            var session = sPlayerMan.Sessions.First();
+            server.PlayerMan.SetAttachedEntity(session, player);
+            sPlayerMan.JoinGame(session);
+
+            using var writer = new StringWriter();
+            Assert.That(loader.TrySaveGrid(grid, writer));
+            yaml = writer.ToString();
+
+            // The contents go; the grid stays.
+            foreach (var child in sEntMan.GetComponent<TransformComponent>(grid)._children.ToArray())
+            {
+                sEntMan.DeleteEntity(child);
+            }
+        });
+
+        await RunTicksSync(server, client, 20);
+        var gridsBefore = sEntMan.Count<Robust.Shared.Map.Components.MapGridComponent>();
+        var mapsBefore = sEntMan.Count<Robust.Shared.Map.Components.MapComponent>();
+
+        var fullStates = 0;
+        client.ResolveDependency<Robust.Client.GameStates.IClientGameStateManager>().GameStateApplied += args =>
+        {
+            if (args.AppliedState.FromSequence == GameTick.Zero)
+                fullStates++;
+        };
+
+        Assert.That(MapLoaderSystem.TryParse(new StringReader(yaml), out var data));
+        StagedGridLoad load = default!;
+        await server.WaitPost(() => load = loader.BeginLoadOntoGrid(data!, "onto", grid));
+        var done = false;
+        var steps = 0;
+        while (!done)
+        {
+            await server.WaitPost(() => done = loader.StepLoad(load, TimeSpan.Zero));
+            await RunTicksSync(server, client, 1);
+            Assert.That(++steps, Is.LessThan(Children * 10), "the load never finished");
+        }
+
+        Assert.That(steps, Is.GreaterThan(Children * 2), "the load was not spread over ticks");
+        Assert.That(load.State, Is.EqualTo(StagedLoadState.Done));
+        Assert.That(load.Grid!.Value.Owner, Is.EqualTo(grid), "the contents went onto another grid");
+        await RunTicksSync(server, client, 5);
+
+        var nets = new List<(NetEntity Net, string Name, int Value)>();
+        await server.WaitPost(() =>
+        {
+            Assert.That(sEntMan.Count<Robust.Shared.Map.Components.MapGridComponent>(), Is.EqualTo(gridsBefore), "a second grid was made");
+            Assert.That(sEntMan.Count<Robust.Shared.Map.Components.MapComponent>(), Is.EqualTo(mapsBefore), "a map was made");
+            Assert.That(sEntMan.GetComponent<TransformComponent>(grid).MapUid, Is.EqualTo(map));
+
+            var found = new List<(string, int)>();
+            foreach (var child in sEntMan.GetComponent<TransformComponent>(grid)._children)
+            {
+                var meta = sEntMan.GetComponent<MetaDataComponent>(child);
+                Assert.That(meta.EntityPaused, Is.False, $"{meta.EntityName} is still paused");
+                Assert.That(meta.EntityLifeStage, Is.EqualTo(EntityLifeStage.MapInitialized));
+                var value = sEntMan.GetComponent<AutoNetworkingTestComponent>(child).IsNetworked;
+                found.Add((meta.EntityName, value));
+                nets.Add((meta.NetEntity, meta.EntityName, value));
+            }
+
+            Assert.That(found.OrderBy(x => x.Item2), Is.EqualTo(expected.OrderBy(x => x.Value)));
+        });
+
+        await client.WaitPost(() =>
+        {
+            foreach (var (net, name, value) in nets)
+            {
+                Assert.That(cEntMan.TryGetEntityData(net, out var uid, out var meta), $"the client is missing {name}");
+                Assert.That(meta!.EntityName, Is.EqualTo(name));
+                Assert.That(cEntMan.GetComponent<AutoNetworkingTestComponent>(uid!.Value).IsNetworked, Is.EqualTo(value));
+                Assert.That(meta.EntityPaused, Is.False, $"the client thinks {name} is paused");
+            }
+        });
+
+        Assert.That(fullStates, Is.Zero, "the client requested a full state");
+    }
 }
