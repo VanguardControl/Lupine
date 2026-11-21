@@ -511,26 +511,34 @@ public sealed partial class EntityDeserializer :
 
             foreach (var ent in ents)
             {
-                var entity = EntMan.AllocEntity(proto);
-                Result.Entities.Add(entity);
-                UidMap.Add(ent.YamlId, entity);
-                Entities.Add(entity, ent);
-
-                if (ent.PostInit)
-                    PostMapInit.Add(entity);
-
-                if (ent.Paused)
-                    Paused.Add(entity);
-
-                if (ent.ToDelete)
-                    ToDelete.Add(entity);
-
-                if (Options.StoreYamlUids)
-                    EntMan.AddComponent<YamlUidComponent>(entity).Uid = ent.YamlId;
+                AllocateEntity(proto, ent);
             }
         }
 
         _log.Debug($"Allocated {Entities.Count} entities in {_stopwatch.Elapsed}");
+    }
+
+    // Wolfgate: split out of AllocateEntities so a staged load can allocate one entity at a time.
+    private EntityUid AllocateEntity(EntityPrototype? proto, EntData ent)
+    {
+        var entity = EntMan.AllocEntity(proto);
+        Result.Entities.Add(entity);
+        UidMap.Add(ent.YamlId, entity);
+        Entities.Add(entity, ent);
+
+        if (ent.PostInit)
+            PostMapInit.Add(entity);
+
+        if (ent.Paused)
+            Paused.Add(entity);
+
+        if (ent.ToDelete)
+            ToDelete.Add(entity);
+
+        if (Options.StoreYamlUids)
+            EntMan.AddComponent<YamlUidComponent>(entity).Uid = ent.YamlId;
+
+        return entity;
     }
 
     private void AllocateMapIds()
@@ -572,24 +580,30 @@ public sealed partial class EntityDeserializer :
         _stopwatch.Restart();
         foreach (var (entity, data) in Entities)
         {
-#if EXCEPTION_TOLERANCE
-            try
-            {
-#endif
-                CurrentReadingEntity = data;
-                LoadEntity(entity, _metaQuery.Comp(entity), data.Components, data.MissingComponents);
-#if EXCEPTION_TOLERANCE
-            }
-            catch (Exception e)
-            {
-                ToDelete.Add(entity);
-                _log.Error($"Encountered error while loading entity. Yaml uid: {data.YamlId}. Loaded loaded entity: {EntMan.ToPrettyString(entity)}. Error:\n{e}.");
-            }
-#endif
+            LoadEntityData(entity, data);
         }
 
         CurrentReadingEntity = null;
         _log.Debug($"Loaded {Entities.Count} entities in {_stopwatch.Elapsed}");
+    }
+
+    // Wolfgate: split out of LoadEntities so a staged load can load one entity at a time.
+    private void LoadEntityData(EntityUid entity, EntData data)
+    {
+#if EXCEPTION_TOLERANCE
+        try
+        {
+#endif
+            CurrentReadingEntity = data;
+            LoadEntity(entity, _metaQuery.Comp(entity), data.Components, data.MissingComponents);
+#if EXCEPTION_TOLERANCE
+        }
+        catch (Exception e)
+        {
+            ToDelete.Add(entity);
+            _log.Error($"Encountered error while loading entity. Yaml uid: {data.YamlId}. Loaded loaded entity: {EntMan.ToPrettyString(entity)}. Error:\n{e}.");
+        }
+#endif
     }
 
     private void LoadEntity(
