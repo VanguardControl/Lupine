@@ -53,12 +53,22 @@ internal sealed partial class PvsSystem
         session.Budget = new() {NewLimit = int.MaxValue, EnterLimit = int.MaxValue};
 
         var fromTick = session.FromTick;
-        foreach (ref var ent in CollectionsMarshal.AsSpan(_cachedForceOverride))
+
+        // Wolfgate: a session that holds the whole list only gets what changed; see PvsSystem.ForceDelta.cs.
+        if (!TryAddForcedDelta(session, fromTick))
         {
-            ref var meta = ref _metadataMemory.GetRef(ent.Ptr.Index);
-            meta.Validate(ent.Meta);
-            AddEntity(session, ref ent, ref meta, fromTick);
+            var curTick = _gameTiming.CurTick;
+            foreach (ref var ent in CollectionsMarshal.AsSpan(_cachedForceOverride))
+            {
+                ref var meta = ref _metadataMemory.GetRef(ent.Ptr.Index);
+                meta.Validate(ent.Meta);
+                AddEntity(session, ref ent, ref meta, fromTick);
+                if (_forceDelta)
+                    NoteForcedResult(session, ent.Ptr, curTick);
+            }
         }
+
+        AddForceDropped(session, fromTick);
 
         foreach (var uid in session.Viewers)
         {
@@ -171,6 +181,8 @@ internal sealed partial class PvsSystem
         {
             CacheOverrideParents(uid, _cachedForceOverride, _forceOverrideSet, out _);
         }
+
+        UpdateForceDelta(); // Wolfgate
 
         _cachedGlobalOverride.Clear();
         _globalOverrideSet.Clear();
