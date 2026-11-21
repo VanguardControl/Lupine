@@ -160,6 +160,12 @@ internal sealed class PvsSession(ICommonSession session, ResizableMemoryRegion<P
     public int EvictionCursor;
 
     /// <summary>
+    /// Last tick whose state left out a force-sent entity. Until the client acks a later state it may not hold the
+    /// whole force-send list, so it takes the full walk; see PvsSystem.ForceDelta.cs.
+    /// </summary>
+    public GameTick ForceIncomplete;
+
+    /// <summary>
     /// Clears all stored game state data. This should only be used after the game state has been serialized.
     /// </summary>
     public void ClearState()

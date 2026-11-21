@@ -55,6 +55,10 @@ internal sealed partial class PvsSystem
             if (data.LastSeen == toTick)
                 continue;
 
+            // Wolfgate: a force-sent entity that had nothing to send this tick is still held by the client.
+            if (_forceHeld.Contains(intPtr))
+                continue;
+
             // A range-limited grid or map must never sit detached on a client, which can't re-attach a grid's
             // children. Delete it there instead; it is sent as new if a viewer comes back. The deletion first rides
             // in the next tick's state, so that is the eviction tick.

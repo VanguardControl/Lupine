@@ -74,6 +74,10 @@ internal sealed partial class PvsSystem
             if (meta.LifeStage >= EntityLifeStage.Terminating)
                 continue;
 
+            // Force-sent entities are only re-sent when they change, so an old LastSeen is not "out of view".
+            if (_forceHeld.Contains(new PvsIndex(index)))
+                continue;
+
             session.Evicted.Add((meta.NetEntity, curTick));
             entry = new PvsData { Evicted = curTick };
             budget--;

@@ -302,6 +302,15 @@ namespace Robust.Shared
             CVarDef.Create("net.pvs_evict_scan", 16384, CVar.ARCHIVE | CVar.SERVERONLY);
 
         /// <summary>
+        /// Force-sent entities (every grid and map) are added to a client's state only on ticks where they changed
+        /// since the state it last acked, instead of on every tick. The client keeps holding the rest. Clients that
+        /// just joined, asked for a full state or ack more than 20 ticks late get the whole list as before. Off until
+        /// a test server has run it.
+        /// </summary>
+        public static readonly CVarDef<bool> NetPvsForceDelta =
+            CVarDef.Create("net.pvs_force_delta", false, CVar.ARCHIVE | CVar.SERVERONLY);
+
+        /// <summary>
         /// Most entities one sweep evicts from a client, so the client never deletes a large batch in one frame.
         /// </summary>
         public static readonly CVarDef<int> NetPvsEvictBudget =
