@@ -65,6 +65,21 @@ public sealed partial class MapLoaderSystem
     }
 
     /// <summary>
+    /// Starts loading a grid file's contents onto a grid that already exists, where it stands: the file's own grid
+    /// entity is not made, and everything saved on it is built on <paramref name="grid"/> instead. For a hull whose
+    /// contents were saved and deleted while the grid itself was kept, so that whatever points at the grid still does.
+    /// Entities are hidden from queries until the load is done and end up unpaused. A failed load deletes what it
+    /// made and leaves the grid alone.
+    /// </summary>
+    public StagedGridLoad BeginLoadOntoGrid(MappingDataNode data, string source, EntityUid grid, DeserializationOptions? options = null)
+    {
+        var xform = Transform(grid);
+        var load = new StagedGridLoad(source, EntityUid.Invalid, xform.MapID) { Adopt = grid };
+        load.Work = RunStaged(load, data, options ?? DeserializationOptions.Default).GetEnumerator();
+        return load;
+    }
+
+    /// <summary>
     /// Advances a load until it finishes or the budget is spent. True once the load is over, whether it worked
     /// (<see cref="StagedGridLoad.Grid"/> is set) or failed (everything it made is deleted).
     /// </summary>
@@ -127,7 +142,8 @@ public sealed partial class MapLoaderSystem
             Delete(load.Deserializer.Result);
 
         load.Deserializer = null;
-        Del(load.Map);
+        if (load.Map.IsValid())
+            Del(load.Map);
     }
 
     private IEnumerable<bool> RunStaged(StagedGridLoad load, MappingDataNode data, DeserializationOptions options)
@@ -150,6 +166,7 @@ public sealed partial class MapLoaderSystem
             ev.RenamedPrototypes,
             ev.DeletedPrototypes);
         load.Deserializer = deserializer;
+        deserializer.AdoptGrid = load.Adopt;
 
         if (!deserializer.TryProcessData())
         {
@@ -237,6 +254,9 @@ public sealed class StagedGridLoad
 
     internal IEnumerator<bool>? Work;
     internal EntityDeserializer? Deserializer;
+
+    /// <summary>The existing grid the file is loaded onto, for <see cref="MapLoaderSystem.BeginLoadOntoGrid"/>.</summary>
+    internal EntityUid? Adopt;
 
     internal StagedGridLoad(string source, EntityUid map, MapId mapId)
     {
