@@ -167,6 +167,11 @@ internal sealed partial class PvsSystem
             var query = AllEntityQuery<MetaDataComponent>();
             while (query.MoveNext(out var uid, out var md))
             {
+                // Wolfgate: an entity of a staged grid load that has not been started yet. The load dirties it on the
+                // tick it starts, with its net ticks moved to that tick, so it is sent in full then.
+                if (md.EntityLifeStage < EntityLifeStage.Initialized)
+                    continue;
+
                 DebugTools.Assert(md.EntityLifeStage >= EntityLifeStage.Initialized, $"Entity {ToPrettyString(uid)} has not been initialized");
                 DebugTools.Assert(md.EntityLifeStage < EntityLifeStage.Terminating, $"Entity {ToPrettyString(uid)} is/has been terminated");
                 if (md.EntityLastModifiedTick <= fromTick)
@@ -202,7 +207,11 @@ Transform last modified: {Transform(uid).LastModifiedTick}");
 
                 foreach (var uid in add)
                 {
-                    if (!toSend.Add(uid) || !_metaQuery.TryGetComponent(uid, out var md))
+                    // Wolfgate: not started yet (staged grid load); it is in the dirty set of the tick it starts on.
+                    if (!_metaQuery.TryGetComponent(uid, out var md) || md.EntityLifeStage < EntityLifeStage.Initialized)
+                        continue;
+
+                    if (!toSend.Add(uid))
                         continue;
 
                     DebugTools.Assert(md.EntityLifeStage >= EntityLifeStage.Initialized, $"Entity {ToPrettyString(uid)} has not been initialized");
