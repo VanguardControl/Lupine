@@ -39,6 +39,13 @@ public record struct SerializationOptions
     public bool KeepExternalReferences = false;
 
     /// <summary>
+    /// Wolfgate: with <see cref="KeepExternalReferences"/>, also write an entity's parent that is not being saved
+    /// as that entity, instead of marking the entity an orphan. Loaded by the same process it comes back parented
+    /// where it was: for saving part of what stands on a grid or map that stays, and putting it back later.
+    /// </summary>
+    public bool KeepExternalParents = false;
+
+    /// <summary>
     /// Log level to use when auto-including entities while serializing. Null implies no logs.
     /// See <see cref="MissingEntityBehaviour"/>.
     /// </summary>
