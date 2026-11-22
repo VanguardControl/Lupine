@@ -155,14 +155,13 @@ public sealed partial class EntityDeserializer
         foreach (var component in metadata.NetComponents.Values)
         {
             if (component.LastModifiedTick != GameTick.Zero)
-            {
                 component.LastModifiedTick = tick;
 
-                // A component that sends only its changed fields would otherwise send just what initialising
-                // touches, to a client that has never had the whole of it.
-                if (component is IComponentDelta delta)
-                    delta.LastUnclassifiedDirty = tick;
-            }
+            // A component that sends only its changed fields would otherwise send just what initialising touches,
+            // to a client that has never had the whole of it. That holds for one the file left as its prototype
+            // made it too: its ticks are zero here, and a field dirtied while it starts would go out alone.
+            if (component is IComponentDelta delta)
+                delta.LastUnclassifiedDirty = tick;
 
             if (component.CreationTick != GameTick.Zero)
                 component.CreationTick = tick;
