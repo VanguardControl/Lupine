@@ -52,14 +52,19 @@ public sealed partial class MapLoaderSystem
     /// Starts loading a grid onto a new paused map without doing any of the work yet; call <see cref="StepLoad"/>
     /// until it returns true. The load consumes <paramref name="data"/>; parse the file again for another load.
     /// </summary>
-    public StagedGridLoad BeginLoadGrid(MappingDataNode data, string source, DeserializationOptions? options = null)
+    /// <param name="migrate">
+    /// Whether prototypes the content has renamed or removed since the file was written are renamed or dropped, as
+    /// any load does. False for a file this server wrote moments ago, where "removed" entries would delete live
+    /// things such as a suit's attached hood.
+    /// </param>
+    public StagedGridLoad BeginLoadGrid(MappingDataNode data, string source, DeserializationOptions? options = null, bool migrate = true)
     {
         var opts = options ?? DeserializationOptions.Default;
         var mapUid = _mapSystem.CreateMap(out var mapId, runMapInit: opts.InitializeMaps);
         _mapSystem.SetPaused(mapUid, true);
         _stagingMaps.Add(mapUid);
 
-        var load = new StagedGridLoad(source, mapUid, mapId);
+        var load = new StagedGridLoad(source, mapUid, mapId) { Migrate = migrate };
         load.Work = RunStaged(load, data, opts).GetEnumerator();
         return load;
     }
@@ -71,10 +76,10 @@ public sealed partial class MapLoaderSystem
     /// Entities are hidden from queries until the load is done and end up unpaused. A failed load deletes what it
     /// made and leaves the grid alone.
     /// </summary>
-    public StagedGridLoad BeginLoadOntoGrid(MappingDataNode data, string source, EntityUid grid, DeserializationOptions? options = null)
+    public StagedGridLoad BeginLoadOntoGrid(MappingDataNode data, string source, EntityUid grid, DeserializationOptions? options = null, bool migrate = true)
     {
         var xform = Transform(grid);
-        var load = new StagedGridLoad(source, EntityUid.Invalid, xform.MapID) { Adopt = grid };
+        var load = new StagedGridLoad(source, EntityUid.Invalid, xform.MapID) { Adopt = grid, Migrate = migrate };
         load.Work = RunStaged(load, data, options ?? DeserializationOptions.Default).GetEnumerator();
         return load;
     }
@@ -149,7 +154,8 @@ public sealed partial class MapLoaderSystem
     private IEnumerable<bool> RunStaged(StagedGridLoad load, MappingDataNode data, DeserializationOptions options)
     {
         var ev = new BeforeEntityReadEvent();
-        RaiseLocalEvent(ev);
+        if (load.Migrate)
+            RaiseLocalEvent(ev);
 
         var opts = new MapLoadOptions
         {
@@ -257,6 +263,8 @@ public sealed class StagedGridLoad
 
     /// <summary>The existing grid the file is loaded onto, for <see cref="MapLoaderSystem.BeginLoadOntoGrid"/>.</summary>
     internal EntityUid? Adopt;
+
+    internal bool Migrate = true;
 
     internal StagedGridLoad(string source, EntityUid map, MapId mapId)
     {
