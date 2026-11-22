@@ -1011,6 +1011,10 @@ public sealed partial class EntitySerializer : ISerializationContext,
             if (value == EntityUid.Invalid)
                 return InvalidNode;
 
+            // Wolfgate: see SerializationOptions.KeepExternalParents.
+            if (Options.KeepExternalReferences && Options.KeepExternalParents && !EntMan.Deleted(value))
+                return new ValueDataNode(EntityDeserializer.ExternalPrefix + value.Id.ToString(CultureInfo.InvariantCulture));
+
             DebugTools.Assert(!Orphans.Contains(CurrentEntityYamlUid));
             Orphans.Add(CurrentEntityYamlUid);
 

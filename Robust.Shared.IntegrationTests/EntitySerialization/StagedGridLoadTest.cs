@@ -11,6 +11,8 @@ using Robust.Shared.EntitySerialization;
 using Robust.Shared.EntitySerialization.Systems;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
+using Robust.Shared.Serialization.Markdown.Mapping;
+using Robust.Shared.IoC;
 using Robust.Shared.Maths;
 using Robust.Shared.Player;
 using Robust.Shared.Timing;
@@ -368,6 +370,149 @@ internal sealed class StagedGridLoadTest : RobustIntegrationTest
                 Assert.That(meta!.EntityName, Is.EqualTo(name));
                 Assert.That(cEntMan.GetComponent<AutoNetworkingTestComponent>(uid!.Value).IsNetworked, Is.EqualTo(value));
                 Assert.That(meta.EntityPaused, Is.False, $"the client thinks {name} is paused");
+            }
+        });
+
+        Assert.That(fullStates, Is.Zero, "the client requested a full state");
+    }
+    /// <summary>
+    /// Part of what stands on a grid is saved with its parent kept, deleted, and put back under the same grid.
+    /// </summary>
+    [Test]
+    public async Task LooseEntitiesComeBackUnderTheirParent()
+    {
+        await using var pair = await StartConnectedPair(
+            new ServerIntegrationOptions { Pool = false, ExtraPrototypes = Prototypes },
+            new ClientIntegrationOptions { Pool = false, ExtraPrototypes = Prototypes });
+        var (client, server) = pair;
+
+        var sEntMan = server.ResolveDependency<IEntityManager>();
+        var cEntMan = client.ResolveDependency<IEntityManager>();
+        var sPlayerMan = server.ResolveDependency<ISharedPlayerManager>();
+        var mapSys = server.System<SharedMapSystem>();
+        var metaSys = server.System<MetaDataSystem>();
+        var loader = server.System<MapLoaderSystem>();
+
+        SerializationTestHelper.LoadTileDefs(server.ProtoMan, server.ResolveDependency<ITileDefinitionManager>(), "space");
+        SerializationTestHelper.LoadTileDefs(client.ProtoMan, client.ResolveDependency<ITileDefinitionManager>(), "space");
+        var tile = new Tile(server.ProtoMan.Index<TileDef>("a").TileId);
+        server.Post(() => server.ResolveDependency<IConfigurationManager>().SetCVar(CVars.NetPVS, false));
+        await RunTicksSync(server, client, 10);
+
+        EntityUid grid = default;
+        EntityUid stays = default;
+        MappingDataNode data = default!;
+        var expected = new List<(string Name, int Value, Vector2 At)>();
+        await server.WaitPost(() =>
+        {
+            var map = mapSys.CreateMap();
+            var made = mapSys.CreateGridEntity(map);
+            grid = made.Owner;
+            mapSys.SetTile(grid, made.Comp, Vector2i.Zero, tile);
+
+            var taken = new HashSet<EntityUid>();
+            EntityUid last = default;
+            for (var i = 0; i < Children; i++)
+            {
+                // The last one sits inside another, and points at the one that stays.
+                var parent = i == Children - 1 ? last : grid;
+                var at = new Vector2(0.1f + i * 0.01f, 0.5f);
+                last = sEntMan.SpawnEntity(null, new EntityCoordinates(parent, at));
+                metaSys.SetEntityName(last, $"child {i}");
+                sEntMan.AddComponent<AutoNetworkingTestComponent>(last).IsNetworked = 100 + i;
+                taken.Add(last);
+                expected.Add(($"child {i}", 100 + i, at));
+            }
+
+            stays = sEntMan.SpawnEntity(null, new EntityCoordinates(grid, new Vector2(0.9f, 0.9f)));
+            metaSys.SetEntityName(stays, "stays");
+            sEntMan.AddComponent<EntitySaveTestComponent>(last).Entity = stays;
+
+            var player = sEntMan.SpawnEntity(null, new EntityCoordinates(map, new Vector2(50, 50)));
+            var session = sPlayerMan.Sessions.First();
+            server.PlayerMan.SetAttachedEntity(session, player);
+            sPlayerMan.JoinGame(session);
+
+            var serializer = new EntitySerializer(server.ResolveDependency<IEntitySystemManager>().DependencyCollection, SerializationOptions.Default with
+            {
+                MissingEntityBehaviour = MissingEntityBehaviour.Ignore,
+                ErrorOnOrphan = false,
+                KeepExternalReferences = true,
+                KeepExternalParents = true,
+            });
+            serializer.ReserveYamlIds(taken);
+            foreach (var uid in taken)
+            {
+                serializer.SerializeEntity(uid);
+            }
+
+            data = serializer.Write();
+            foreach (var uid in taken)
+            {
+                if (!sEntMan.Deleted(uid))
+                    sEntMan.DeleteEntity(uid);
+            }
+        });
+
+        await RunTicksSync(server, client, 20);
+        var fullStates = 0;
+        client.ResolveDependency<Robust.Client.GameStates.IClientGameStateManager>().GameStateApplied += args =>
+        {
+            if (args.AppliedState.FromSequence == GameTick.Zero)
+                fullStates++;
+        };
+
+        StagedGridLoad load = default!;
+        await server.WaitPost(() => load = loader.BeginLoadEntities(data, "loose"));
+        var done = false;
+        var steps = 0;
+        while (!done)
+        {
+            await server.WaitPost(() => done = loader.StepLoad(load, TimeSpan.Zero));
+            await RunTicksSync(server, client, 1);
+            Assert.That(++steps, Is.LessThan(Children * 10), "the load never finished");
+        }
+
+        Assert.That(load.State, Is.EqualTo(StagedLoadState.Done));
+        Assert.That(load.UidMap, Has.Count.EqualTo(Children));
+        await RunTicksSync(server, client, 5);
+
+        var nets = new List<(NetEntity Net, string Name, int Value)>();
+        await server.WaitPost(() =>
+        {
+            Assert.That(sEntMan.Deleted(stays), Is.False);
+            var found = new List<(string, int, Vector2)>();
+            foreach (var uid in load.Result!.Entities)
+            {
+                var meta = sEntMan.GetComponent<MetaDataComponent>(uid);
+                var xform = sEntMan.GetComponent<TransformComponent>(uid);
+                Assert.That(meta.EntityPaused, Is.False, $"{meta.EntityName} is still paused");
+                Assert.That(xform.GridUid, Is.EqualTo(grid), $"{meta.EntityName} is not on the grid");
+                var value = sEntMan.GetComponent<AutoNetworkingTestComponent>(uid).IsNetworked;
+                found.Add((meta.EntityName, value, xform.LocalPosition));
+                nets.Add((meta.NetEntity, meta.EntityName, value));
+
+                if (meta.EntityName == $"child {Children - 1}")
+                {
+                    Assert.That(xform.ParentUid, Is.Not.EqualTo(grid), "the nested one came back loose");
+                    Assert.That(sEntMan.GetComponent<EntitySaveTestComponent>(uid).Entity, Is.EqualTo(stays), "a reference to what stayed was lost");
+                }
+                else
+                {
+                    Assert.That(xform.ParentUid, Is.EqualTo(grid));
+                }
+            }
+
+            Assert.That(found.OrderBy(x => x.Item2), Is.EqualTo(expected.OrderBy(x => x.Value)));
+        });
+
+        await client.WaitPost(() =>
+        {
+            foreach (var (net, name, value) in nets)
+            {
+                Assert.That(cEntMan.TryGetEntityData(net, out var uid, out var meta), $"the client is missing {name}");
+                Assert.That(cEntMan.GetComponent<AutoNetworkingTestComponent>(uid!.Value).IsNetworked, Is.EqualTo(value));
+                Assert.That(meta!.EntityPaused, Is.False);
             }
         });
 

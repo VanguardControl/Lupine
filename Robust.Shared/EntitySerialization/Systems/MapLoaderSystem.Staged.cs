@@ -85,6 +85,20 @@ public sealed partial class MapLoaderSystem
     }
 
     /// <summary>
+    /// Starts loading a file of loose entities that were saved with their parents kept
+    /// (<see cref="SerializationOptions.KeepExternalParents"/>): each comes back under the parent it had, which must
+    /// still exist, hidden from queries until the load is done. The file holds no map and no grid.
+    /// <see cref="StagedGridLoad.Result"/> lists what was made and <see cref="StagedGridLoad.UidMap"/> maps the file's
+    /// ids to the new entities.
+    /// </summary>
+    public StagedGridLoad BeginLoadEntities(MappingDataNode data, string source, DeserializationOptions? options = null, bool migrate = true)
+    {
+        var load = new StagedGridLoad(source, EntityUid.Invalid, MapId.Nullspace) { Loose = true, Migrate = migrate };
+        load.Work = RunStaged(load, data, options ?? DeserializationOptions.Default).GetEnumerator();
+        return load;
+    }
+
+    /// <summary>
     /// Advances a load until it finishes or the budget is spent. True once the load is over, whether it worked
     /// (<see cref="StagedGridLoad.Grid"/> is set) or failed (everything it made is deleted).
     /// </summary>
@@ -159,9 +173,9 @@ public sealed partial class MapLoaderSystem
 
         var opts = new MapLoadOptions
         {
-            MergeMap = load.MapId,
+            MergeMap = load.Loose ? null : load.MapId,
             DeserializationOptions = options,
-            ExpectedCategory = FileCategory.Grid,
+            ExpectedCategory = load.Loose ? null : FileCategory.Grid,
         };
         opts.DeserializationOptions.AssignMapIds = true;
 
@@ -180,7 +194,7 @@ public sealed partial class MapLoaderSystem
             yield break;
         }
 
-        if (deserializer.Result.Category != FileCategory.Grid && deserializer.Result.Category != FileCategory.Unknown)
+        if (!load.Loose && deserializer.Result.Category != FileCategory.Grid && deserializer.Result.Category != FileCategory.Unknown)
         {
             Log.Error($"{load.Source} does not hold a grid, but {deserializer.Result.Category}");
             yield break;
@@ -193,7 +207,7 @@ public sealed partial class MapLoaderSystem
             yield return false;
         }
 
-        if (deserializer.Result.Category != FileCategory.Grid)
+        if (!load.Loose && deserializer.Result.Category != FileCategory.Grid)
         {
             Log.Error($"{load.Source} does not hold a grid, but {deserializer.Result.Category}");
             yield break;
@@ -208,6 +222,15 @@ public sealed partial class MapLoaderSystem
         foreach (var _ in deserializer.StartEntitiesStaged())
         {
             yield return false;
+        }
+
+        if (load.Loose)
+        {
+            load.Result = deserializer.Result;
+            load.UidMap = deserializer.UidMap;
+            load.Deserializer = null;
+            load.State = StagedLoadState.Done;
+            yield break;
         }
 
         MapInitalizeMerged(merged, load.MapId);
@@ -265,6 +288,12 @@ public sealed class StagedGridLoad
     internal EntityUid? Adopt;
 
     internal bool Migrate = true;
+
+    /// <summary>A file of loose entities with kept parents; see <see cref="MapLoaderSystem.BeginLoadEntities"/>.</summary>
+    internal bool Loose;
+
+    /// <summary>The file's entity ids and what they became, once a loose load is done.</summary>
+    public IReadOnlyDictionary<int, EntityUid>? UidMap { get; internal set; }
 
     internal StagedGridLoad(string source, EntityUid map, MapId mapId)
     {
