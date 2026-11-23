@@ -1,12 +1,13 @@
 name: Build & Test
 
 on:
+  # Wolfgate: also test the Lupine branches and pull requests into them.
   push:
-    branches: [master]
+    branches: [master, 'wolfgate/**']
   merge_group:
   pull_request:
     types: [ opened, reopened, synchronize, ready_for_review ]
-    branches: [master]
+    branches: [master, 'wolfgate/**']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
