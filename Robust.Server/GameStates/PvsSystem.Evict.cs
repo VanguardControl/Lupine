@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Robust.Shared;
 using Robust.Shared.GameObjects;
@@ -12,10 +13,85 @@ namespace Robust.Server.GameStates;
 // A client never drops an entity that left its view; it parks it in nullspace and keeps it until it reconnects.
 // A ghost touring the sector ends up holding the whole sector, and frame time collapses under the GC. The server
 // now tells a client to delete entities it has not been sent for a while and sends them as new if they come back.
-// Nothing changes on the client: a deletion of a detached entity is an ordinary deletion to it, and the client
-// detaches the entity's children before deleting it, so they survive until their own eviction.
+// Nothing changes on the client: a deletion of a detached entity is an ordinary deletion to it.
+//
+// A deleted entity's children are moved to nullspace by the client without being marked as out of view, so they are
+// never restored when they come back: the server sends only what changed since the client last acked them. An entity
+// that left view first is already marked and is safe. A range-limited root is the exception, as it is deleted the
+// tick after it leaves view, while the client is still working through its children's departures 75 a tick
+// (net.pvs_exit_budget). Its descendants are evicted with it (EvictRootDescendants).
 internal sealed partial class PvsSystem
 {
+    private readonly Stack<TransformComponent> _evictStack = new();
+
+    /// <summary>
+    /// Evicts everything a client holds under each range-limited root the leave job evicted from it, so the client
+    /// deletes those entities with the root and gets them as new on return. Runs on the main thread once the leave job
+    /// has finished and before states are built; the eviction rides in the state about to be built.
+    /// </summary>
+    private void EvictRootDescendants()
+    {
+        var curTick = _gameTiming.CurTick;
+        foreach (var session in _sessions)
+        {
+            if (session.EvictedRoots.Count == 0)
+                continue;
+
+            var evicted = 0;
+            foreach (var root in session.EvictedRoots)
+            {
+                // A root deleted on the server takes its descendants with it through the global deletion list.
+                if (TryGetEntity(root, out var uid) && _xformQuery.TryGetComponent(uid, out var xform))
+                    evicted += EvictDescendants(session, xform, curTick);
+            }
+
+            session.EvictedRoots.Clear();
+
+            if (evicted > 0)
+                Log.Debug($"Evicted {evicted} entities under range-limited roots from {session.Session}");
+        }
+    }
+
+    private int EvictDescendants(PvsSession session, TransformComponent root, GameTick tick)
+    {
+        var evicted = 0;
+        _evictStack.Clear();
+        _evictStack.Push(root);
+
+        while (_evictStack.TryPop(out var xform))
+        {
+            var children = xform.ChildEnumerator;
+            while (children.MoveNext(out var child))
+            {
+                if (!_xformQuery.TryGetComponent(child, out var childXform)
+                    || !_metaQuery.TryGetComponent(child, out var meta))
+                {
+                    continue;
+                }
+
+                // Deleting takes its descendants along, through the global deletion list.
+                if (meta.EntityLifeStage >= EntityLifeStage.Terminating)
+                    continue;
+
+                _evictStack.Push(childXform);
+
+                if (meta.PvsData == PvsIndex.Invalid)
+                    continue;
+
+                // Never sent to this client, or already evicted from it.
+                ref var data = ref session.DataMemory.GetRef(meta.PvsData.Index);
+                if (data.LastSeen == GameTick.Zero)
+                    continue;
+
+                session.Evicted.Add((meta.NetEntity, tick));
+                data = new PvsData { Evicted = tick };
+                evicted++;
+            }
+        }
+
+        return evicted;
+    }
+
     private void OnEvictSecondsChanged(float value) => _evictAgeTicks = SecondsToTicks(value);
 
     private void OnEvictIntervalChanged(float value) => _evictIntervalTicks = Math.Max(1, SecondsToTicks(value));
