@@ -61,11 +61,14 @@ internal sealed partial class PvsSystem
 
             // A range-limited grid or map must never sit detached on a client, which can't re-attach a grid's
             // children. Delete it there instead; it is sent as new if a viewer comes back. The deletion first rides
-            // in the next tick's state, so that is the eviction tick.
+            // in the next tick's state, so that is the eviction tick. What the client holds under it goes too, on the
+            // main thread (EvictRootDescendants): this job runs while the next tick simulates.
             if (_rangeLimitedRoots.Contains(intPtr))
             {
                 var evictTick = new GameTick(toTick.Value + 1);
-                session.Evicted.Add((IndexToNetEntity(intPtr), evictTick));
+                var root = IndexToNetEntity(intPtr);
+                session.Evicted.Add((root, evictTick));
+                session.EvictedRoots.Add(root);
                 data = new PvsData { Evicted = evictTick };
                 continue;
             }

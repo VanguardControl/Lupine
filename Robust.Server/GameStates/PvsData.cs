@@ -150,6 +150,12 @@ internal sealed class PvsSession(ICommonSession session, ResizableMemoryRegion<P
     public readonly List<(NetEntity Entity, GameTick Tick)> Evicted = new();
 
     /// <summary>
+    /// Range-limited roots the leave job evicted from this client. Everything the client holds under them is evicted on
+    /// the main thread before the next state is built; see <see cref="PvsSystem.EvictRootDescendants"/>.
+    /// </summary>
+    public readonly List<NetEntity> EvictedRoots = new();
+
+    /// <summary>
     /// First tick at which this client's held entities are swept for eviction again.
     /// </summary>
     public GameTick NextEvictionSweep;

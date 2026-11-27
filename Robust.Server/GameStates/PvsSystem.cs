@@ -231,6 +231,10 @@ internal sealed partial class PvsSystem : EntitySystem
 
         _trafficStats.BeginTick(); // Wolfgate: net stats
 
+        // Lupine: the last leave job has finished; take out what clients held under the roots it evicted.
+        if (CullingEnabled)
+            EvictRootDescendants();
+
         // Get visible chunks, and update any dirty chunks.
         BeforeSerializeStates();
 
