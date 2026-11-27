@@ -228,6 +228,10 @@ internal sealed partial class PvsSystem : EntitySystem
         // Ensure each session has a PvsSession entry before starting any parallel jobs.
         CacheSessionData(players);
 
+        // Lupine: the last leave job has finished; take out what clients held under the roots it evicted.
+        if (CullingEnabled)
+            EvictRootDescendants();
+
         // Get visible chunks, and update any dirty chunks.
         BeforeSerializeStates();
 

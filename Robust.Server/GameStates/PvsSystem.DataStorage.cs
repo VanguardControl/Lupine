@@ -206,6 +206,7 @@ internal sealed partial class PvsSystem
 
         // The client is about to receive a full state and drop everything else, so pending evictions are moot.
         session.Evicted.Clear();
+        session.EvictedRoots.Clear();
         session.EvictionCursor = 0;
     }
 
